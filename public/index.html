@@ -1,0 +1,1343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CTI Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg-deep: #0a0e17;
+            --bg-surface: #111827;
+            --bg-elevated: #1e293b;
+            --accent-primary: #00ff9d;
+            --accent-secondary: #0ea5e9;
+            --severity-critical: #ef4444;
+            --severity-high: #f59e0b;
+            --severity-medium: #eab308;
+            --severity-low: #22c55e;
+            --text-primary: #e2e8f0;
+            --text-muted: #94a3b8;
+            --border-color: #334155;
+            --ioc-ip: #a78bfa;
+            --ioc-domain: #38bdf8;
+            --ioc-url: #fb923c;
+            --ioc-hash: #f472b6;
+            --progress-open: #38bdf8;
+            --progress-assigned: #a78bfa;
+            --progress-closed: #22c55e;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-deep);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .dashboard { max-width: 1800px; margin: 0 auto; padding: 24px; }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 32px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .logo { display: flex; align-items: center; gap: 12px; }
+
+        .logo-icon {
+            width: 40px; height: 40px;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700; font-size: 18px; color: var(--bg-deep);
+        }
+
+        h1 { font-family: 'JetBrains Mono', monospace; font-size: 24px; font-weight: 600; color: var(--accent-primary); }
+
+        .header-meta { text-align: right; }
+        .last-updated { font-size: 13px; color: var(--text-muted); font-family: 'Fira Code', monospace; }
+
+        .controls { display: flex; gap: 12px; margin-top: 8px; }
+
+        .btn {
+            font-family: 'Inter', sans-serif;
+            font-size: 13px; font-weight: 500;
+            padding: 6px 14px;
+            border-radius: 6px; border: 1px solid var(--border-color);
+            background: var(--bg-surface); color: var(--text-primary);
+            cursor: pointer; transition: all 0.2s ease;
+            display: flex; align-items: center; gap: 6px;
+        }
+
+        .btn:hover { background: var(--bg-elevated); border-color: var(--accent-primary); }
+        .btn.active { background: var(--accent-primary); color: var(--bg-deep); border-color: var(--accent-primary); }
+        .btn.loading { opacity: 0.7; pointer-events: none; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .status-line { margin-top: 8px; font-size: 12px; color: var(--text-muted); font-family: 'Fira Code', monospace; min-height: 18px; }
+        .status-line.error { color: var(--severity-critical); }
+        .status-line.success { color: var(--accent-primary); }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .stat-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 16px 20px;
+            position: relative; overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: ''; position: absolute;
+            top: 0; left: 0; width: 4px; height: 100%;
+            background: var(--accent-primary);
+        }
+
+        .stat-card.critical::before { background: var(--severity-critical); }
+        .stat-card.high::before { background: var(--severity-high); }
+        .stat-card.ioc::before { background: var(--ioc-domain); }
+
+        .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+
+        .stat-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 28px; font-weight: 700;
+        }
+
+        .stat-card.critical .stat-value { color: var(--severity-critical); }
+        .stat-card.high .stat-value { color: var(--severity-high); }
+
+        .refresh-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+            gap: 12px;
+            margin: -12px 0 28px;
+            padding: 14px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+        }
+
+        .refresh-summary-item {
+            min-width: 0;
+            padding: 10px 12px;
+            background: var(--bg-deep);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+        }
+
+        .refresh-summary-label {
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 3px;
+        }
+
+        .refresh-summary-value {
+            font-family: 'Fira Code', monospace;
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .refresh-summary-value.good { color: var(--accent-primary); }
+        .refresh-summary-value.warn { color: var(--severity-high); }
+
+        .main-tabs {
+            display: flex; gap: 4px; margin-bottom: 16px;
+            background: var(--bg-surface);
+            padding: 4px; border-radius: 8px; border: 1px solid var(--border-color);
+        }
+
+        .main-tab {
+            flex: 1; padding: 10px 20px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px; font-weight: 500;
+            background: transparent; border: none;
+            color: var(--text-muted); cursor: pointer;
+            border-radius: 6px; transition: all 0.2s ease;
+        }
+
+        .main-tab:hover { color: var(--text-primary); }
+        .main-tab.active { background: var(--accent-primary); color: var(--bg-deep); }
+
+        .content-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+
+        .panel {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: 12px; overflow: hidden;
+        }
+
+        .panel-header {
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+
+        .panel-title { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 600; text-transform: uppercase; }
+
+        .filter-row {
+            display: flex; gap: 8px; padding: 12px 20px;
+            background: var(--bg-deep);
+            border-bottom: 1px solid var(--border-color);
+            flex-wrap: wrap;
+        }
+
+        .filter-btn {
+            font-family: 'Fira Code', monospace;
+            font-size: 11px; padding: 5px 12px;
+            border-radius: 4px; border: 1px solid var(--border-color);
+            background: transparent; color: var(--text-muted);
+            cursor: pointer; transition: all 0.2s ease;
+        }
+
+        .filter-btn:hover { border-color: var(--text-muted); color: var(--text-primary); }
+        .filter-btn.active { background: var(--accent-primary); color: var(--bg-deep); border-color: var(--accent-primary); }
+
+        .search-box { position: relative; }
+        .search-input {
+            font-family: 'Fira Code', monospace; font-size: 13px;
+            padding: 8px 12px 8px 36px;
+            background: var(--bg-deep); border: 1px solid var(--border-color);
+            border-radius: 6px; color: var(--text-primary); width: 220px;
+            transition: all 0.2s ease;
+        }
+        .search-input:focus { outline: none; border-color: var(--accent-primary); box-shadow: 0 0 0 3px rgba(0, 255, 157, 0.1); }
+        .search-input::placeholder { color: var(--text-muted); }
+        .search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); }
+
+        .list-container { max-height: 600px; overflow-y: auto; }
+        .list-container::-webkit-scrollbar { width: 6px; }
+        .list-container::-webkit-scrollbar-track { background: var(--bg-deep); }
+        .list-container::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+
+        .list-item {
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer; transition: all 0.15s ease;
+        }
+
+        .list-item:hover { background: var(--bg-elevated); }
+        .list-item.selected { background: var(--bg-elevated); border-left: 3px solid var(--accent-primary); }
+
+        .item-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 6px; }
+
+        .item-id {
+            font-family: 'Fira Code', monospace;
+            font-size: 13px; font-weight: 600;
+            color: var(--accent-secondary); text-decoration: none;
+        }
+        .item-id:hover { text-decoration: underline; }
+
+        .severity-badge {
+            font-family: 'Fira Code', monospace;
+            font-size: 10px; font-weight: 600;
+            padding: 2px 7px; border-radius: 4px; text-transform: uppercase;
+        }
+
+        .severity-badge.critical { background: rgba(239, 68, 68, 0.15); color: var(--severity-critical); }
+        .severity-badge.high { background: rgba(245, 158, 11, 0.15); color: var(--severity-high); }
+        .severity-badge.medium { background: rgba(234, 179, 8, 0.15); color: var(--severity-medium); }
+        .severity-badge.low { background: rgba(34, 197, 94, 0.15); color: var(--severity-low); }
+
+        .item-desc { font-size: 12px; color: var(--text-muted); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+        .item-meta { display: flex; gap: 14px; margin-top: 8px; font-size: 11px; color: var(--text-muted); }
+        .item-meta span { display: flex; align-items: center; gap: 4px; }
+        .cvss-score { font-family: 'Fira Code', monospace; font-weight: 600; }
+
+        .ioc-badge {
+            font-family: 'Fira Code', monospace;
+            font-size: 10px; font-weight: 600;
+            padding: 2px 7px; border-radius: 4px; text-transform: uppercase;
+        }
+
+        .ioc-badge.ip { background: rgba(167, 139, 250, 0.15); color: var(--ioc-ip); }
+        .ioc-badge.domain { background: rgba(56, 189, 248, 0.15); color: var(--ioc-domain); }
+        .ioc-badge.url { background: rgba(251, 146, 60, 0.15); color: var(--ioc-url); }
+        .ioc-badge.hash { background: rgba(244, 114, 182, 0.15); color: var(--ioc-hash); }
+
+        .source-badge {
+            font-family: 'Fira Code', monospace;
+            font-size: 9px; padding: 2px 6px;
+            background: var(--bg-deep); border: 1px solid var(--border-color);
+            border-radius: 3px; color: var(--text-muted);
+        }
+
+        .detail-panel { max-height: 600px; overflow-y: auto; }
+
+        .detail-placeholder {
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            height: 400px; color: var(--text-muted); text-align: center; padding: 40px;
+        }
+        .detail-placeholder svg { width: 48px; height: 48px; margin-bottom: 12px; opacity: 0.4; }
+
+        .detail-content { padding: 24px; }
+
+        .detail-header { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border-color); }
+        .detail-id { font-family: 'Fira Code', monospace; font-size: 18px; font-weight: 600; color: var(--accent-secondary); margin-bottom: 6px; }
+        .detail-desc { font-size: 13px; line-height: 1.6; color: var(--text-primary); }
+
+        .detail-section { margin-bottom: 20px; }
+        .detail-section-title { font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--accent-primary); margin-bottom: 10px; }
+
+        .metrics-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        .metric-item { background: var(--bg-deep); padding: 10px 14px; border-radius: 6px; border: 1px solid var(--border-color); }
+        .metric-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 3px; }
+        .metric-value { font-family: 'Fira Code', monospace; font-size: 14px; font-weight: 600; }
+
+        .detail-list { list-style: none; }
+        .detail-list li { margin-bottom: 6px; font-size: 12px; }
+        .detail-list a { font-family: 'Fira Code', monospace; font-size: 11px; color: var(--accent-secondary); text-decoration: none; word-break: break-all; }
+        .detail-list a:hover { text-decoration: underline; }
+
+        .tags-list { display: flex; flex-wrap: wrap; gap: 6px; }
+        .tag { font-family: 'Fira Code', monospace; font-size: 10px; padding: 3px 8px; background: var(--bg-deep); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-muted); }
+
+        .progress-badge {
+            font-family: 'Fira Code', monospace;
+            font-size: 10px; font-weight: 600;
+            padding: 2px 7px; border-radius: 4px; text-transform: uppercase;
+            border: 1px solid transparent;
+        }
+
+        .progress-badge.open { background: rgba(56, 189, 248, 0.15); color: var(--progress-open); border-color: rgba(56, 189, 248, 0.3); }
+        .progress-badge.assigned { background: rgba(167, 139, 250, 0.15); color: var(--progress-assigned); border-color: rgba(167, 139, 250, 0.3); }
+        .progress-badge.closed { background: rgba(34, 197, 94, 0.15); color: var(--progress-closed); border-color: rgba(34, 197, 94, 0.3); }
+
+        .progress-tag-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+        .progress-tag-btn {
+            font-family: 'Fira Code', monospace;
+            font-size: 11px; padding: 6px 10px;
+            border-radius: 4px; border: 1px solid var(--border-color);
+            background: var(--bg-deep); color: var(--text-muted);
+            cursor: pointer; transition: all 0.2s ease;
+        }
+        .progress-tag-btn:hover { color: var(--text-primary); border-color: var(--accent-secondary); }
+        .progress-tag-btn.active { color: var(--bg-deep); border-color: transparent; }
+        .progress-tag-btn.active.none { background: var(--text-muted); }
+        .progress-tag-btn.active.open { background: var(--progress-open); }
+        .progress-tag-btn.active.assigned { background: var(--progress-assigned); }
+        .progress-tag-btn.active.closed { background: var(--progress-closed); }
+
+        .progress-list-note {
+            margin-top: 8px; font-size: 12px; color: var(--text-muted);
+            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+        }
+
+        .note-input {
+            width: 100%; min-height: 96px; resize: vertical;
+            font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.5;
+            padding: 10px 12px; margin-bottom: 10px;
+            color: var(--text-primary); background: var(--bg-deep);
+            border: 1px solid var(--border-color); border-radius: 6px;
+        }
+        .note-input:focus { outline: none; border-color: var(--accent-primary); box-shadow: 0 0 0 3px rgba(0, 255, 157, 0.1); }
+        .notes-list { display: flex; flex-direction: column; gap: 10px; }
+        .note-item { background: var(--bg-deep); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px 12px; }
+        .note-meta { font-family: 'Fira Code', monospace; font-size: 10px; color: var(--text-muted); margin-bottom: 6px; }
+        .note-body { font-size: 13px; color: var(--text-primary); white-space: pre-wrap; }
+
+        .loader { display: flex; align-items: center; justify-content: center; padding: 60px; }
+        .spinner { width: 36px; height: 36px; border: 3px solid var(--border-color); border-top-color: var(--accent-primary); border-radius: 50%; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .error-state { text-align: center; padding: 40px; color: var(--severity-critical); }
+        .error-state p { margin-bottom: 12px; }
+
+        .empty-state { text-align: center; padding: 40px; color: var(--text-muted); }
+
+        .feed-status { display: flex; gap: 12px; flex-wrap: wrap; }
+        .feed-indicator { display: flex; align-items: center; gap: 6px; font-family: 'Fira Code', monospace; font-size: 11px; }
+        .feed-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .feed-dot.success { background: var(--severity-low); }
+        .feed-dot.error { background: var(--severity-critical); }
+        .feed-dot.pending { background: var(--text-muted); }
+        .feed-dot.skipped { background: var(--severity-high); }
+
+        @media (max-width: 1400px) { .content-grid { grid-template-columns: 1fr; } }
+
+        @media (max-width: 768px) {
+            header { flex-direction: column; gap: 16px; align-items: flex-start; }
+            .header-meta { text-align: left; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .panel-header { align-items: flex-start; flex-direction: column; gap: 12px; }
+            .search-input { width: min(100%, 320px); }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <header>
+            <div class="logo">
+                <div class="logo-icon">CTI</div>
+                <h1>Threat Intelligence Dashboard</h1>
+            </div>
+            <div class="header-meta">
+                <div class="last-updated" id="lastUpdated">Loading...</div>
+                <div class="controls">
+                    <button class="btn" id="refreshBtn" onclick="manualRefresh()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                        </svg>
+                        Refresh
+                    </button>
+                    <button class="btn" id="autoRefreshBtn" onclick="toggleAutoRefresh()">
+                        Auto: Off
+                    </button>
+                    <button class="btn" onclick="exportData()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+                        </svg>
+                        Export
+                    </button>
+                </div>
+                <div class="status-line" id="refreshStatus"></div>
+            </div>
+        </header>
+
+        <div class="stats-grid" id="statsGrid">
+            <div class="stat-card"><div class="stat-label">Total CVEs</div><div class="stat-value" id="statTotalCves">-</div></div>
+            <div class="stat-card critical"><div class="stat-label">Critical</div><div class="stat-value" id="statCritical">-</div></div>
+            <div class="stat-card high"><div class="stat-label">High</div><div class="stat-value" id="statHigh">-</div></div>
+            <div class="stat-card ioc"><div class="stat-label">Malware URLs</div><div class="stat-value" id="statUrls">-</div></div>
+            <div class="stat-card ioc"><div class="stat-label">Malware Hashes</div><div class="stat-value" id="statHashes">-</div></div>
+            <div class="stat-card ioc"><div class="stat-label">Suspicious IPs</div><div class="stat-value" id="statIps">-</div></div>
+            <div class="stat-card ioc"><div class="stat-label">Malicious Domains</div><div class="stat-value" id="statDomains">-</div></div>
+            <div class="stat-card"><div class="stat-label">Last 24h CVEs</div><div class="stat-value" id="statRecent24h">-</div></div>
+        </div>
+
+        <div class="refresh-summary" id="lastRefreshSummary">
+            <div class="refresh-summary-item"><div class="refresh-summary-label">Last Refresh</div><div class="refresh-summary-value">Not run yet</div></div>
+            <div class="refresh-summary-item"><div class="refresh-summary-label">New CVEs</div><div class="refresh-summary-value">-</div></div>
+            <div class="refresh-summary-item"><div class="refresh-summary-label">Updated CVEs</div><div class="refresh-summary-value">-</div></div>
+            <div class="refresh-summary-item"><div class="refresh-summary-label">New IOCs</div><div class="refresh-summary-value">-</div></div>
+            <div class="refresh-summary-item"><div class="refresh-summary-label">Feeds</div><div class="refresh-summary-value">-</div></div>
+        </div>
+
+        <div class="main-tabs">
+            <button class="main-tab active" onclick="switchMainTab('cves', this)">CVE Vulnerabilities</button>
+            <button class="main-tab" onclick="switchMainTab('iocs', this)">Indicators of Compromise</button>
+            <button class="main-tab" onclick="switchMainTab('progress', this)">CVE Progress</button>
+            <button class="main-tab" onclick="switchMainTab('feeds', this)">Feed Status</button>
+        </div>
+
+        <div id="cvesPanel" class="content-grid">
+            <div class="panel">
+                <div class="panel-header">
+                    <span class="panel-title">CVE List</span>
+                    <div class="search-box">
+                        <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <input type="text" class="search-input" id="cveSearch" placeholder="Search CVEs..." oninput="debounceSearch()">
+                    </div>
+                </div>
+                <div class="filter-row" id="cveSeverityFilters">
+                    <button class="filter-btn active" data-filter="all" onclick="filterCves('all')">All</button>
+                    <button class="filter-btn" data-filter="critical" onclick="filterCves('critical')">Critical</button>
+                    <button class="filter-btn" data-filter="high" onclick="filterCves('high')">High</button>
+                    <button class="filter-btn" data-filter="medium" onclick="filterCves('medium')">Medium</button>
+                    <button class="filter-btn" data-filter="low" onclick="filterCves('low')">Low</button>
+                    <span style="margin-left: auto; font-size: 11px; color: var(--text-muted);" id="cveCount">0 items</span>
+                </div>
+                <div class="filter-row" id="cveTimeFilters">
+                    <button class="filter-btn active" data-time-range="all" onclick="filterTimeRange('cves', 'all')">Any Time</button>
+                    <button class="filter-btn" data-time-range="1d" onclick="filterTimeRange('cves', '1d')">24h</button>
+                    <button class="filter-btn" data-time-range="7d" onclick="filterTimeRange('cves', '7d')">7d</button>
+                    <button class="filter-btn" data-time-range="14d" onclick="filterTimeRange('cves', '14d')">14d</button>
+                    <button class="filter-btn" data-time-range="30d" onclick="filterTimeRange('cves', '30d')">30d</button>
+                </div>
+                <div class="list-container" id="cveList"><div class="loader"><div class="spinner"></div></div></div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header"><span class="panel-title">Details</span></div>
+                <div class="detail-panel" id="detailPanel">
+                    <div class="detail-placeholder">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 12h6M12 9v6M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        <p>Select an item to view details</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="iocsPanel" class="content-grid" style="display: none;">
+            <div class="panel">
+                <div class="panel-header">
+                    <span class="panel-title">IOC Database</span>
+                    <div class="search-box">
+                        <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <input type="text" class="search-input" id="iocSearch" placeholder="Search IOCs..." oninput="debounceSearchIocs()">
+                    </div>
+                </div>
+                <div class="filter-row" id="iocFilters">
+                    <button class="filter-btn active" data-ioc-type="all" onclick="filterIocs('all')">All Types</button>
+                    <button class="filter-btn" data-ioc-type="ip" onclick="filterIocs('ip')">IPs</button>
+                    <button class="filter-btn" data-ioc-type="domain" onclick="filterIocs('domain')">Domains</button>
+                    <button class="filter-btn" data-ioc-type="url" onclick="filterIocs('url')">URLs</button>
+                    <button class="filter-btn" data-ioc-type="hash" onclick="filterIocs('hash')">Hashes</button>
+                    <span style="margin-left: auto; font-size: 11px; color: var(--text-muted);" id="iocCount">0 items</span>
+                </div>
+                <div class="filter-row" id="iocTimeFilters">
+                    <button class="filter-btn active" data-time-range="all" onclick="filterTimeRange('iocs', 'all')">Any Time</button>
+                    <button class="filter-btn" data-time-range="1d" onclick="filterTimeRange('iocs', '1d')">24h</button>
+                    <button class="filter-btn" data-time-range="7d" onclick="filterTimeRange('iocs', '7d')">7d</button>
+                    <button class="filter-btn" data-time-range="14d" onclick="filterTimeRange('iocs', '14d')">14d</button>
+                    <button class="filter-btn" data-time-range="30d" onclick="filterTimeRange('iocs', '30d')">30d</button>
+                </div>
+                <div class="list-container" id="iocList"><div class="loader"><div class="spinner"></div></div></div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header"><span class="panel-title">IOC Details</span></div>
+                <div class="detail-panel" id="iocDetailPanel">
+                    <div class="detail-placeholder">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 12h6M12 9v6M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        <p>Select an IOC to view details</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="progressPanel" class="content-grid" style="display: none;">
+            <div class="panel">
+                <div class="panel-header">
+                    <span class="panel-title">CVE Progress</span>
+                    <div class="search-box">
+                        <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <input type="text" class="search-input" id="progressSearch" placeholder="Search progress..." oninput="debounceSearchProgress()">
+                    </div>
+                </div>
+                <div class="filter-row" id="progressStatusFilters">
+                    <button class="filter-btn active" data-progress-status="all" onclick="filterProgress('all')">All</button>
+                    <button class="filter-btn" data-progress-status="open" onclick="filterProgress('open')">Open</button>
+                    <button class="filter-btn" data-progress-status="assigned" onclick="filterProgress('assigned')">Assigned</button>
+                    <button class="filter-btn" data-progress-status="closed" onclick="filterProgress('closed')">Closed</button>
+                    <span style="margin-left: auto; font-size: 11px; color: var(--text-muted);" id="progressCount">0 items</span>
+                </div>
+                <div class="list-container" id="progressList"><div class="loader"><div class="spinner"></div></div></div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header"><span class="panel-title">Progress Notes</span></div>
+                <div class="detail-panel" id="progressDetailPanel">
+                    <div class="detail-placeholder">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 12h6M12 9v6M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        <p>Select a CVE to view progress</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="feedsPanel" style="display: none;">
+            <div class="panel">
+                <div class="panel-header"><span class="panel-title">Feed Status</span></div>
+                <div class="detail-content" id="feedStatusContent"><div class="loader"><div class="spinner"></div></div></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allCves = [];
+        let filteredCves = [];
+        let allIocs = [];
+        let filteredIocs = [];
+        let progressItems = [];
+        let filteredProgressItems = [];
+        let selectedItem = null;
+        let selectedProgressItem = null;
+        let selectedIocType = 'all';
+        let selectedSeverity = 'all';
+        let selectedProgressStatus = 'all';
+        let selectedCveTimeRange = 'all';
+        let selectedIocTimeRange = 'all';
+        let lastRefresh = null;
+        let activeTab = 'cves';
+        let autoRefreshEnabled = false;
+        let autoRefreshTimer = null;
+        let isRefreshing = false;
+
+        const API_BASE = '/api';
+
+        async function fetchStats() {
+            try {
+                const res = await fetch(`${API_BASE}/stats`);
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.error || 'Stats request failed');
+
+                const { cves, iocs, recent24h } = data.data;
+                document.getElementById('statTotalCves').textContent = cves.total || 0;
+                document.getElementById('statCritical').textContent = cves.critical || 0;
+                document.getElementById('statHigh').textContent = cves.high || 0;
+                document.getElementById('statRecent24h').textContent = recent24h || 0;
+
+                const iocMap = {};
+                (iocs || []).forEach(i => { iocMap[i.type] = i.count; });
+                document.getElementById('statUrls').textContent = iocMap.url || 0;
+                document.getElementById('statHashes').textContent = iocMap.hash || 0;
+                document.getElementById('statIps').textContent = iocMap.ip || 0;
+                document.getElementById('statDomains').textContent = iocMap.domain || 0;
+            } catch (e) {
+                setRefreshStatus(`Stats unavailable: ${e.message}`, 'error');
+                console.error('Stats error:', e);
+            }
+        }
+
+        async function fetchCves(search = '') {
+            const params = new URLSearchParams({ limit: 200, offset: 0 });
+            if (selectedSeverity !== 'all') params.set('severity', selectedSeverity);
+            const fromDate = getRangeStart(selectedCveTimeRange);
+            if (fromDate) params.set('fromDate', fromDate);
+            if (search) params.set('search', search);
+
+            try {
+                document.getElementById('cveList').innerHTML = '<div class="loader"><div class="spinner"></div></div>';
+                const res = await fetch(`${API_BASE}/cves?${params}`);
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.error || 'CVE request failed');
+                allCves = data.data || [];
+                filteredCves = [...allCves];
+                if (selectedItem?.id && !filteredCves.some(cve => cve.id === selectedItem.id)) {
+                    selectedItem = null;
+                    resetDetailPanel('detailPanel', 'Select an item to view details');
+                }
+                renderCveList();
+            } catch (e) {
+                document.getElementById('cveList').innerHTML = `<div class="error-state"><p>Failed to load CVEs</p><p>${escapeHtml(e.message)}</p></div>`;
+            }
+        }
+
+        function renderCveList() {
+            const container = document.getElementById('cveList');
+            document.getElementById('cveCount').textContent = `${filteredCves.length} items`;
+
+            if (filteredCves.length === 0) {
+                container.innerHTML = '<div class="empty-state">No CVEs found. Click Refresh to fetch public feeds.</div>';
+                return;
+            }
+
+            container.innerHTML = filteredCves.map((cve, index) => `
+                <div class="list-item ${selectedItem?.id === cve.id ? 'selected' : ''}" onclick="selectCveByIndex(${index})">
+                    <div class="item-header">
+                        <a href="${sourceUrlForCve(cve)}" target="_blank" rel="noopener noreferrer" class="item-id" onclick="event.stopPropagation()">${escapeHtml(cve.id)}</a>
+                        <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">
+                            ${renderProgressBadge(cve.progress_status)}
+                            <span class="severity-badge ${escapeHtml(cve.severity || 'low')}">${escapeHtml(cve.severity || 'low')}</span>
+                        </div>
+                    </div>
+                    <div class="item-desc">${escapeHtml(cve.description || '')}</div>
+                    <div class="item-meta">
+                        <span>CVSS: <span class="cvss-score">${(cve.cvss_score || 0).toFixed(1)}</span></span>
+                        <span>${escapeHtml(cve.source?.toUpperCase() || 'UNKNOWN')}</span>
+                        <span>${formatDate(cve.published_at)}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function selectCveByIndex(index) {
+            const cve = filteredCves[index];
+            if (cve) selectCve(cve);
+        }
+
+        function selectCve(cve) {
+            selectedItem = cve;
+            renderCveList();
+            renderCveDetail(cve);
+        }
+
+        function renderCveDetail(cve) {
+            const panel = document.getElementById('detailPanel');
+            panel.innerHTML = `
+                <div class="detail-content">
+                    <div class="detail-header">
+                        <div class="detail-id">${escapeHtml(cve.id)}</div>
+                        <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;">
+                            <span class="severity-badge ${escapeHtml(cve.severity || 'low')}">${escapeHtml(cve.severity?.toUpperCase() || 'LOW')}</span>
+                            ${renderProgressBadge(cve.progress_status)}
+                        </div>
+                        <p class="detail-desc">${escapeHtml(cve.description || 'No description available')}</p>
+                    </div>
+                    <div class="detail-section">
+                        <h3 class="detail-section-title">CVSS Metrics</h3>
+                        <div class="metrics-grid">
+                            <div class="metric-item">
+                                <div class="metric-label">Base Score</div>
+                                <div class="metric-value" style="color: var(--severity-${escapeHtml(cve.severity || 'low')})">${(cve.cvss_score || 0).toFixed(1)}</div>
+                            </div>
+                            <div class="metric-item">
+                                <div class="metric-label">Severity</div>
+                                <div class="metric-value">${escapeHtml(cve.severity?.toUpperCase() || 'LOW')}</div>
+                            </div>
+                            ${cve.cvss_vector ? `
+                            <div class="metric-item" style="grid-column: span 2;">
+                                <div class="metric-label">Vector String</div>
+                                <div class="metric-value" style="font-size: 11px; word-break: break-all;">${escapeHtml(cve.cvss_vector)}</div>
+                            </div>` : ''}
+                        </div>
+                    </div>
+                    <div class="detail-section">
+                        <h3 class="detail-section-title">Source</h3>
+                        <span class="source-badge">${escapeHtml(cve.source?.toUpperCase() || 'UNKNOWN')}</span>
+                    </div>
+                    <div class="detail-section">
+                        <h3 class="detail-section-title">Progress Tag</h3>
+                        ${renderProgressControls(cve)}
+                    </div>
+                    <div class="detail-section">
+                        <h3 class="detail-section-title">Actions</h3>
+                        <a href="${sourceUrlForCve(cve)}" target="_blank" rel="noopener noreferrer" class="btn" style="display: inline-flex;">
+                            View Source
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>
+                        </a>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderProgressBadge(status) {
+            if (!status) return '';
+            return `<span class="progress-badge ${escapeHtml(status)}">${escapeHtml(status)}</span>`;
+        }
+
+        function renderProgressControls(cve) {
+            const current = cve.progress_status || 'none';
+            const cveId = escapeJsArg(cve.id);
+            return `
+                <div class="progress-tag-controls">
+                    <button class="progress-tag-btn none ${current === 'none' ? 'active' : ''}" onclick="updateCveProgress('${cveId}', null)">None</button>
+                    <button class="progress-tag-btn open ${current === 'open' ? 'active' : ''}" onclick="updateCveProgress('${cveId}', 'open')">Open</button>
+                    <button class="progress-tag-btn assigned ${current === 'assigned' ? 'active' : ''}" onclick="updateCveProgress('${cveId}', 'assigned')">Assigned</button>
+                    <button class="progress-tag-btn closed ${current === 'closed' ? 'active' : ''}" onclick="updateCveProgress('${cveId}', 'closed')">Closed</button>
+                </div>
+            `;
+        }
+
+        async function updateCveProgress(cveId, status) {
+            try {
+                const res = await fetch(`${API_BASE}/cves/${encodeURIComponent(cveId)}/progress`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status })
+                });
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.error || 'Progress update failed');
+
+                applyProgressUpdate(data.data);
+                const message = status ? `${cveId} marked ${status}.` : `${cveId} progress tag cleared.`;
+                setRefreshStatus(message, 'success');
+
+                if (activeTab === 'progress') {
+                    await fetchProgress(document.getElementById('progressSearch')?.value || '');
+                    if (status && selectedProgressItem?.id === cveId) {
+                        await fetchProgressDetail(cveId);
+                    } else if (!status && selectedProgressItem?.id === cveId) {
+                        selectedProgressItem = null;
+                        resetDetailPanel('progressDetailPanel', 'Select a CVE to view progress');
+                    }
+                }
+            } catch (e) {
+                setRefreshStatus(`Progress update failed: ${e.message}`, 'error');
+            }
+        }
+
+        function applyProgressUpdate(progress) {
+            if (!progress?.id) return;
+            const fields = {
+                progress_status: progress.progress_status || null,
+                progress_created_at: progress.progress_created_at || null,
+                progress_updated_at: progress.progress_updated_at || null,
+                progress_note_count: progress.progress_note_count || 0
+            };
+
+            allCves = allCves.map(cve => cve.id === progress.id ? { ...cve, ...fields } : cve);
+            filteredCves = filteredCves.map(cve => cve.id === progress.id ? { ...cve, ...fields } : cve);
+            progressItems = progressItems.map(cve => cve.id === progress.id ? { ...cve, ...progress } : cve);
+            filteredProgressItems = filteredProgressItems.map(cve => cve.id === progress.id ? { ...cve, ...progress } : cve);
+
+            if (selectedItem?.id === progress.id) {
+                selectedItem = { ...selectedItem, ...fields };
+                renderCveList();
+                renderCveDetail(selectedItem);
+            } else if (activeTab === 'cves') {
+                renderCveList();
+            }
+        }
+
+        async function fetchIocs(type = 'all', search = '') {
+            const params = new URLSearchParams({ limit: 200, offset: 0 });
+            if (type !== 'all') params.set('type', type);
+            const fromDate = getRangeStart(selectedIocTimeRange);
+            if (fromDate) params.set('fromDate', fromDate);
+            if (search) params.set('search', search);
+
+            try {
+                document.getElementById('iocList').innerHTML = '<div class="loader"><div class="spinner"></div></div>';
+                const res = await fetch(`${API_BASE}/iocs?${params}`);
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.error || 'IOC request failed');
+                allIocs = data.data || [];
+                filteredIocs = [...allIocs];
+                renderIocList();
+            } catch (e) {
+                document.getElementById('iocList').innerHTML = `<div class="error-state"><p>Failed to load IOCs</p><p>${escapeHtml(e.message)}</p></div>`;
+            }
+        }
+
+        function renderIocList() {
+            const container = document.getElementById('iocList');
+            document.getElementById('iocCount').textContent = `${filteredIocs.length} items`;
+
+            if (filteredIocs.length === 0) {
+                container.innerHTML = '<div class="empty-state">No IOCs found. Click Refresh to fetch public feeds.</div>';
+                return;
+            }
+
+            container.innerHTML = filteredIocs.map((ioc, index) => `
+                <div class="list-item ${selectedItem?.id === ioc.id ? 'selected' : ''}" onclick="selectIocByIndex(${index})">
+                    <div class="item-header">
+                        <span class="item-id" style="font-size: 12px;">${escapeHtml(ioc.value || '')}</span>
+                        <div style="display: flex; gap: 6px;">
+                            <span class="ioc-badge ${escapeHtml(ioc.type || 'domain')}">${escapeHtml(ioc.type || 'unknown')}</span>
+                            <span class="source-badge">${escapeHtml(ioc.source?.toUpperCase() || 'UNKNOWN')}</span>
+                        </div>
+                    </div>
+                    <div class="item-meta">
+                        <span>Threat: ${escapeHtml(ioc.threat_type || 'unknown')}</span>
+                        <span>Confidence: ${ioc.confidence || 0}%</span>
+                        <span>${formatDate(ioc.last_seen)}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function selectIocByIndex(index) {
+            const ioc = filteredIocs[index];
+            if (ioc) selectIoc(ioc);
+        }
+
+        function selectIoc(ioc) {
+            selectedItem = ioc;
+            renderIocDetail(ioc);
+        }
+
+        function renderIocDetail(ioc) {
+            const panel = document.getElementById('iocDetailPanel');
+            let metadata = {};
+            try { metadata = ioc.metadata ? JSON.parse(ioc.metadata) : {}; } catch (e) {}
+
+            panel.innerHTML = `
+                <div class="detail-content">
+                    <div class="detail-header">
+                        <div class="detail-id" style="font-size: 14px; word-break: break-all;">${escapeHtml(ioc.value || '')}</div>
+                        <div style="display: flex; gap: 6px; margin-bottom: 10px;">
+                            <span class="ioc-badge ${escapeHtml(ioc.type || 'domain')}">${escapeHtml(ioc.type?.toUpperCase() || 'UNKNOWN')}</span>
+                            <span class="severity-badge ${getThreatSeverity(ioc.threat_type)}">${escapeHtml(ioc.threat_type || 'unknown')}</span>
+                        </div>
+                    </div>
+                    <div class="detail-section">
+                        <h3 class="detail-section-title">Classification</h3>
+                        <div class="metrics-grid">
+                            <div class="metric-item">
+                                <div class="metric-label">Source</div>
+                                <div class="metric-value">${escapeHtml(ioc.source?.toUpperCase() || 'UNKNOWN')}</div>
+                            </div>
+                            <div class="metric-item">
+                                <div class="metric-label">Confidence</div>
+                                <div class="metric-value">${ioc.confidence || 0}%</div>
+                            </div>
+                            <div class="metric-item">
+                                <div class="metric-label">First Seen</div>
+                                <div class="metric-value" style="font-size: 11px;">${formatDate(ioc.first_seen)}</div>
+                            </div>
+                            <div class="metric-item">
+                                <div class="metric-label">Last Seen</div>
+                                <div class="metric-value" style="font-size: 11px;">${formatDate(ioc.last_seen)}</div>
+                            </div>
+                        </div>
+                    </div>
+                    ${Object.keys(metadata).length > 0 ? `
+                    <div class="detail-section">
+                        <h3 class="detail-section-title">Metadata</h3>
+                        <div class="tags-list">
+                            ${Object.entries(metadata).filter(([k, v]) => v).slice(0, 10).map(([k, v]) => `
+                                <span class="tag">${escapeHtml(k)}: ${escapeHtml(typeof v === 'string' ? v.substring(0, 50) : JSON.stringify(v))}</span>
+                            `).join('')}
+                        </div>
+                    </div>` : ''}
+                </div>
+            `;
+        }
+
+        async function fetchProgress(search = '') {
+            const params = new URLSearchParams({ limit: 200, offset: 0 });
+            if (selectedProgressStatus !== 'all') params.set('status', selectedProgressStatus);
+            if (search) params.set('search', search);
+
+            try {
+                document.getElementById('progressList').innerHTML = '<div class="loader"><div class="spinner"></div></div>';
+                const res = await fetch(`${API_BASE}/cves/progress?${params}`);
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.error || 'Progress request failed');
+                progressItems = data.data || [];
+                filteredProgressItems = [...progressItems];
+                if (selectedProgressItem?.id && !filteredProgressItems.some(cve => cve.id === selectedProgressItem.id)) {
+                    selectedProgressItem = null;
+                    resetDetailPanel('progressDetailPanel', 'Select a CVE to view progress');
+                }
+                renderProgressList();
+            } catch (e) {
+                document.getElementById('progressList').innerHTML = `<div class="error-state"><p>Failed to load progress</p><p>${escapeHtml(e.message)}</p></div>`;
+            }
+        }
+
+        function renderProgressList() {
+            const container = document.getElementById('progressList');
+            document.getElementById('progressCount').textContent = `${filteredProgressItems.length} items`;
+
+            if (filteredProgressItems.length === 0) {
+                container.innerHTML = '<div class="empty-state">No tagged CVEs.</div>';
+                return;
+            }
+
+            container.innerHTML = filteredProgressItems.map((cve, index) => `
+                <div class="list-item ${selectedProgressItem?.id === cve.id ? 'selected' : ''}" onclick="selectProgressByIndex(${index})">
+                    <div class="item-header">
+                        <a href="${sourceUrlForCve(cve)}" target="_blank" rel="noopener noreferrer" class="item-id" onclick="event.stopPropagation()">${escapeHtml(cve.id)}</a>
+                        <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">
+                            ${renderProgressBadge(cve.progress_status)}
+                            <span class="severity-badge ${escapeHtml(cve.severity || 'low')}">${escapeHtml(cve.severity || 'low')}</span>
+                        </div>
+                    </div>
+                    <div class="item-desc">${escapeHtml(cve.description || '')}</div>
+                    ${cve.latest_note ? `<div class="progress-list-note">${escapeHtml(cve.latest_note)}</div>` : ''}
+                    <div class="item-meta">
+                        <span>Notes: ${cve.progress_note_count || 0}</span>
+                        <span>Updated: ${formatDate(cve.progress_updated_at)}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function selectProgressByIndex(index) {
+            const cve = filteredProgressItems[index];
+            if (cve) {
+                selectedProgressItem = cve;
+                renderProgressList();
+                fetchProgressDetail(cve.id);
+            }
+        }
+
+        async function fetchProgressDetail(cveId) {
+            try {
+                const res = await fetch(`${API_BASE}/cves/${encodeURIComponent(cveId)}/progress`);
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.error || 'Progress detail request failed');
+                selectedProgressItem = data.data;
+                renderProgressDetail(data.data);
+            } catch (e) {
+                document.getElementById('progressDetailPanel').innerHTML = `<div class="error-state"><p>Failed to load progress</p><p>${escapeHtml(e.message)}</p></div>`;
+            }
+        }
+
+        function renderProgressDetail(cve) {
+            const panel = document.getElementById('progressDetailPanel');
+            panel.innerHTML = `
+                <div class="detail-content">
+                    <div class="detail-header">
+                        <div class="detail-id">${escapeHtml(cve.id)}</div>
+                        <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;">
+                            ${renderProgressBadge(cve.progress_status)}
+                            <span class="severity-badge ${escapeHtml(cve.severity || 'low')}">${escapeHtml(cve.severity?.toUpperCase() || 'LOW')}</span>
+                        </div>
+                        <p class="detail-desc">${escapeHtml(cve.description || 'No description available')}</p>
+                    </div>
+                    <div class="detail-section">
+                        <h3 class="detail-section-title">Progress Tag</h3>
+                        ${renderProgressControls(cve)}
+                    </div>
+                    <div class="detail-section">
+                        <h3 class="detail-section-title">Add Note</h3>
+                        <textarea class="note-input" id="progressNoteInput" maxlength="2000" placeholder="Add progress note..."></textarea>
+                        <button class="btn" onclick="addProgressNote('${escapeJsArg(cve.id)}')">Add Note</button>
+                    </div>
+                    <div class="detail-section">
+                        <h3 class="detail-section-title">Notes</h3>
+                        ${renderProgressNotes(cve.notes || [])}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderProgressNotes(notes) {
+            if (!notes.length) return '<div class="empty-state" style="padding: 20px;">No notes yet.</div>';
+
+            return `
+                <div class="notes-list">
+                    ${notes.map(note => `
+                        <div class="note-item">
+                            <div class="note-meta">${formatDate(note.created_at)}</div>
+                            <div class="note-body">${escapeHtml(note.note || '')}</div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        async function addProgressNote(cveId) {
+            const input = document.getElementById('progressNoteInput');
+            const note = input?.value.trim() || '';
+            if (!note) return;
+
+            try {
+                const res = await fetch(`${API_BASE}/cves/${encodeURIComponent(cveId)}/progress/notes`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ note })
+                });
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.error || 'Note request failed');
+                input.value = '';
+                selectedProgressItem = data.data;
+                renderProgressDetail(data.data);
+                await fetchProgress(document.getElementById('progressSearch')?.value || '');
+                setRefreshStatus(`Note added to ${cveId}.`, 'success');
+            } catch (e) {
+                setRefreshStatus(`Note failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function fetchFeedStatus() {
+            try {
+                const res = await fetch(`${API_BASE}/stats/feeds`);
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.error || 'Feed status request failed');
+                renderFeedStatus(data.data || []);
+            } catch (e) {
+                document.getElementById('feedStatusContent').innerHTML = `<div class="error-state"><p>Failed to load feed status</p><p>${escapeHtml(e.message)}</p></div>`;
+            }
+        }
+
+        function renderFeedStatus(feeds) {
+            const container = document.getElementById('feedStatusContent');
+            if (feeds.length === 0) {
+                container.innerHTML = '<div class="empty-state">No feed data yet. Click Refresh to fetch data.</div>';
+                return;
+            }
+
+            container.innerHTML = `
+                <div class="detail-section">
+                    <div class="metrics-grid" style="grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));">
+                        ${feeds.map(feed => `
+                            <div class="metric-item">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                    <span style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">${escapeHtml(feed.source?.toUpperCase() || 'UNKNOWN')}</span>
+                                    <span class="feed-dot ${escapeHtml(feed.status || 'pending')}"></span>
+                                </div>
+                                <div style="font-size: 12px; color: var(--text-muted);">
+                                    <div>Last fetch: ${formatDate(feed.last_fetch)}</div>
+                                    <div>Items: ${feed.last_count || 0}</div>
+                                    ${feed.error_message ? `<div style="color: var(--severity-critical);">Error: ${escapeHtml(feed.error_message)}</div>` : ''}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function switchMainTab(tab, button) {
+            activeTab = tab;
+            document.querySelectorAll('.main-tab').forEach(t => t.classList.remove('active'));
+            button?.classList.add('active');
+
+            document.getElementById('cvesPanel').style.display = tab === 'cves' ? 'grid' : 'none';
+            document.getElementById('iocsPanel').style.display = tab === 'iocs' ? 'grid' : 'none';
+            document.getElementById('progressPanel').style.display = tab === 'progress' ? 'grid' : 'none';
+            document.getElementById('feedsPanel').style.display = tab === 'feeds' ? 'block' : 'none';
+
+            if (tab === 'cves' && allCves.length === 0) fetchCves();
+            if (tab === 'iocs' && allIocs.length === 0) fetchIocs();
+            if (tab === 'progress') fetchProgress(document.getElementById('progressSearch')?.value || '');
+            if (tab === 'feeds') fetchFeedStatus();
+        }
+
+        function filterCves(filter) {
+            selectedSeverity = filter;
+            document.querySelectorAll('#cveSeverityFilters .filter-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.filter === filter);
+            });
+            fetchCves(document.getElementById('cveSearch')?.value || '');
+        }
+
+        function filterIocs(type) {
+            selectedIocType = type;
+            document.querySelectorAll('#iocFilters .filter-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.iocType === type);
+            });
+            fetchIocs(type, document.getElementById('iocSearch')?.value || '');
+        }
+
+        function filterProgress(status) {
+            selectedProgressStatus = status;
+            document.querySelectorAll('#progressStatusFilters .filter-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.progressStatus === status);
+            });
+            fetchProgress(document.getElementById('progressSearch')?.value || '');
+        }
+
+        function filterTimeRange(scope, range) {
+            if (scope === 'cves') {
+                selectedCveTimeRange = range;
+                document.querySelectorAll('#cveTimeFilters .filter-btn').forEach(b => {
+                    b.classList.toggle('active', b.dataset.timeRange === range);
+                });
+                fetchCves(document.getElementById('cveSearch')?.value || '');
+                return;
+            }
+
+            selectedIocTimeRange = range;
+            document.querySelectorAll('#iocTimeFilters .filter-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.timeRange === range);
+            });
+            fetchIocs(selectedIocType, document.getElementById('iocSearch')?.value || '');
+        }
+
+        let searchTimeout;
+        function debounceSearch() {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                fetchCves(document.getElementById('cveSearch')?.value || '');
+            }, 300);
+        }
+
+        function debounceSearchIocs() {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                fetchIocs(selectedIocType, document.getElementById('iocSearch')?.value || '');
+            }, 300);
+        }
+
+        function debounceSearchProgress() {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                fetchProgress(document.getElementById('progressSearch')?.value || '');
+            }, 300);
+        }
+
+        async function manualRefresh() {
+            if (isRefreshing) return;
+            isRefreshing = true;
+            const btn = document.getElementById('refreshBtn');
+            btn.classList.add('loading');
+            btn.disabled = true;
+            btn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px;"></div> Refreshing...';
+            setRefreshStatus('Fetching public CTI feeds. This can take a little while...', '');
+
+            try {
+                const res = await fetch(`${API_BASE}/stats/feeds/refresh`, { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.error || 'Refresh failed');
+
+                lastRefresh = new Date();
+                document.getElementById('lastUpdated').textContent = `Updated: ${formatDate(lastRefresh)}`;
+                renderLastRefreshSummary(data.data?.summary);
+                setRefreshStatus(refreshSummary(data.data), 'success');
+            } catch (e) {
+                setRefreshStatus(`Refresh failed: ${e.message}`, 'error');
+                console.error('Refresh error:', e);
+            }
+
+            btn.classList.remove('loading');
+            btn.disabled = false;
+            btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Refresh';
+            isRefreshing = false;
+
+            fetchStats();
+            if (activeTab === 'cves') fetchCves(document.getElementById('cveSearch')?.value || '');
+            if (activeTab === 'iocs') fetchIocs(selectedIocType, document.getElementById('iocSearch')?.value || '');
+            if (activeTab === 'progress') fetchProgress(document.getElementById('progressSearch')?.value || '');
+            if (activeTab === 'feeds') fetchFeedStatus();
+        }
+
+        function toggleAutoRefresh() {
+            autoRefreshEnabled = !autoRefreshEnabled;
+            const btn = document.getElementById('autoRefreshBtn');
+            btn.classList.toggle('active', autoRefreshEnabled);
+            btn.textContent = `Auto: ${autoRefreshEnabled ? 'On' : 'Off'}`;
+
+            if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+            autoRefreshTimer = null;
+
+            if (autoRefreshEnabled) {
+                autoRefreshTimer = setInterval(() => {
+                    manualRefresh();
+                }, 5 * 60 * 1000);
+                setRefreshStatus('Auto-refresh enabled: every 5 minutes.', 'success');
+            } else {
+                setRefreshStatus('Auto-refresh disabled.', '');
+            }
+        }
+
+        function exportData() {
+            const activeTab = document.querySelector('.main-tab.active')?.textContent;
+            if (activeTab?.includes('Progress')) {
+                exportCsv(filteredProgressItems, 'cve-progress-export', ['id', 'progress_status', 'severity', 'cvss_score', 'latest_note', 'progress_updated_at']);
+            } else if (activeTab?.includes('CVE')) {
+                exportCsv(filteredCves, 'cve-export', ['id', 'source', 'severity', 'cvss_score', 'description', 'published_at']);
+            } else if (activeTab?.includes('IOC')) {
+                exportCsv(filteredIocs, 'ioc-export', ['type', 'value', 'source', 'threat_type', 'confidence', 'first_seen', 'last_seen']);
+            }
+        }
+
+        function exportCsv(data, filename, fields) {
+            const headers = fields.join(',');
+            const rows = data.map(item => fields.map(f => {
+                let val = item[f] || '';
+                val = String(val).replace(/"/g, '""');
+                return `"${val}"`;
+            }).join(','));
+            const csv = [headers, ...rows].join('\n');
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${filename}-${new Date().toISOString().split('T')[0]}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function escapeJsArg(text) {
+            return String(text || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        }
+
+        function sourceUrlForCve(cve) {
+            if (/^CVE-\d{4}-\d+$/i.test(cve.id || '')) {
+                return `https://nvd.nist.gov/vuln/detail/${encodeURIComponent(cve.id)}`;
+            }
+            if (/^GHSA-/i.test(cve.id || '')) {
+                return `https://github.com/advisories/${encodeURIComponent(cve.id)}`;
+            }
+            return `https://nvd.nist.gov/vuln/search/results?query=${encodeURIComponent(cve.id || '')}`;
+        }
+
+        function resetDetailPanel(panelId, message) {
+            document.getElementById(panelId).innerHTML = `
+                <div class="detail-placeholder">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 12h6M12 9v6M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    <p>${escapeHtml(message)}</p>
+                </div>
+            `;
+        }
+
+        function setRefreshStatus(message, type) {
+            const status = document.getElementById('refreshStatus');
+            status.className = `status-line ${type || ''}`;
+            status.textContent = message || '';
+        }
+
+        function renderLastRefreshSummary(summary) {
+            const container = document.getElementById('lastRefreshSummary');
+            if (!container || !summary) return;
+
+            const failed = summary.feeds?.failed || 0;
+            const feedText = `${summary.feeds?.successful || 0}/${summary.feeds?.total || 0}`;
+            container.innerHTML = `
+                <div class="refresh-summary-item">
+                    <div class="refresh-summary-label">Last Refresh</div>
+                    <div class="refresh-summary-value">${formatDate(summary.finished_at)}</div>
+                </div>
+                <div class="refresh-summary-item">
+                    <div class="refresh-summary-label">New CVEs</div>
+                    <div class="refresh-summary-value good">${summary.cves?.new || 0}</div>
+                </div>
+                <div class="refresh-summary-item">
+                    <div class="refresh-summary-label">Updated CVEs</div>
+                    <div class="refresh-summary-value">${summary.cves?.updated || 0}</div>
+                </div>
+                <div class="refresh-summary-item">
+                    <div class="refresh-summary-label">New IOCs</div>
+                    <div class="refresh-summary-value good">${summary.iocs?.new || 0}</div>
+                </div>
+                <div class="refresh-summary-item">
+                    <div class="refresh-summary-label">Feeds</div>
+                    <div class="refresh-summary-value ${failed ? 'warn' : 'good'}">${feedText}${failed ? ` (${failed} failed)` : ''}</div>
+                </div>
+            `;
+        }
+
+        function refreshSummary(results) {
+            if (results?.summary) {
+                const summary = results.summary;
+                return `Refresh completed: ${summary.feeds.successful}/${summary.feeds.total} configured feeds succeeded, ${summary.cves.new || 0} new CVEs, ${summary.iocs.new || 0} new IOCs.`;
+            }
+
+            const feeds = Object.entries(results || {}).filter(([key]) => !['alerts', 'summary'].includes(key));
+            if (feeds.length === 0) return 'Refresh completed.';
+
+            const successful = feeds.filter(([, result]) => result?.success).length;
+            const totalItems = feeds.reduce((sum, [, result]) => sum + (result?.count || 0), 0);
+            return `Refresh completed: ${successful}/${feeds.length} feeds succeeded, ${totalItems} items processed.`;
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return 'N/A';
+            const d = new Date(dateStr);
+            if (isNaN(d)) return 'N/A';
+            return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        }
+
+        function getRangeStart(range) {
+            const daysByRange = {
+                '1d': 1,
+                '7d': 7,
+                '14d': 14,
+                '30d': 30
+            };
+            const days = daysByRange[range];
+            if (!days) return null;
+
+            const start = new Date();
+            start.setDate(start.getDate() - days);
+            return start.toISOString();
+        }
+
+        function getThreatSeverity(threatType) {
+            const high = ['malware', 'ransomware', 'c2', 'botnet', 'trojan', 'backdoor'];
+            const med = ['phishing', 'spam'];
+            if (high.some(t => threatType?.toLowerCase().includes(t))) return 'high';
+            if (med.some(t => threatType?.toLowerCase().includes(t))) return 'medium';
+            return 'low';
+        }
+
+        fetchStats();
+        fetchCves();
+
+        setInterval(() => {
+            fetchStats();
+        }, 60000);
+    </script>
+</body>
+</html>

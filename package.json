@@ -1,0 +1,22 @@
+{
+  "name": "cti-dashboard",
+  "version": "1.0.0",
+  "description": "Cyber Threat Intelligence Dashboard - Aggregates CVE and IOC feeds",
+  "main": "server/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "fetch-all": "node server/workers/fetchAll.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "node-cron": "^4.2.1",
+    "sql.js": "^1.11.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
