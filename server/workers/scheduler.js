@@ -15,7 +15,7 @@ import {
     fetchVulnCheckCves
 } from '../services/keyedFeeds.js';
 import { processCveAlerts } from '../services/alerts.js';
-import { finishRefreshMetrics, pruneOldData, startRefreshMetrics } from '../db/database.js';
+import { pruneOldData, saveLastRefreshSummary, withRefreshMetrics } from '../db/database.js';
 import { getFeedConfig } from '../config/env.js';
 
 const jobs = [];
@@ -106,58 +106,59 @@ export function stopScheduler() {
 export async function fetchAllFeeds(feedConfig = getFeedConfig()) {
     console.log('[Scheduler] Manual fetch of all feeds initiated');
 
-    const results = {};
+    const { result: results, metrics } = await withRefreshMetrics(async () => {
+        const results = {};
 
-    startRefreshMetrics();
+        await runFeed(results, 'nvd', () => fetchNvdCves(7, feedConfig.nvdApiKey));
+        await runFeed(results, 'cisa_kev', () => fetchCisaKev());
+        await runFeed(results, 'github', () => fetchGithubAdvisories(feedConfig.githubToken));
 
-    await runFeed(results, 'nvd', () => fetchNvdCves(7, feedConfig.nvdApiKey));
-    await runFeed(results, 'cisa_kev', () => fetchCisaKev());
-    await runFeed(results, 'github', () => fetchGithubAdvisories(feedConfig.githubToken));
+        if (feedConfig.vulncheckApiToken) {
+            await runFeed(results, 'vulncheck', () => fetchVulnCheckCves(feedConfig.vulncheckApiToken));
+        }
+        if (feedConfig.urlhausAuthKey) {
+            await runFeed(results, 'urlhaus', async () => {
+                const urlCount = await fetchUrlhausUrls(500, feedConfig.urlhausAuthKey);
+                const hostCount = await fetchUrlhausHosts(feedConfig.urlhausAuthKey);
+                return urlCount + hostCount;
+            });
+        }
+        if (feedConfig.threatfoxAuthKey) {
+            await runFeed(results, 'threatfox', () => fetchThreatfoxIocs(1, feedConfig.threatfoxAuthKey));
+        }
+        if (feedConfig.malwarebazaarAuthKey) {
+            await runFeed(results, 'malwarebazaar', () => fetchMalwareBazaar(100, feedConfig.malwarebazaarAuthKey));
+        }
+        if (feedConfig.virustotalApiKey && process.env.VIRUSTOTAL_QUERY) {
+            await runFeed(results, 'virustotal', () => fetchVirusTotal(feedConfig.virustotalApiKey));
+        }
+        if (feedConfig.greynoiseApiKey) {
+            await runFeed(results, 'greynoise', () => fetchGreyNoise(feedConfig.greynoiseApiKey));
+        }
+        if (feedConfig.shodanApiKey) {
+            await runFeed(results, 'shodan', () => fetchShodan(feedConfig.shodanApiKey));
+        }
+        if (feedConfig.censysApiId && feedConfig.censysApiSecret) {
+            await runFeed(results, 'censys', () => fetchCensys(feedConfig.censysApiId, feedConfig.censysApiSecret));
+        }
+        if (feedConfig.abuseipdbApiKey) {
+            await runFeed(results, 'abuseipdb', () => fetchAbuseIpdbBlacklist(feedConfig.abuseipdbApiKey));
+        }
+        if (feedConfig.otxApiKey) {
+            await runFeed(results, 'otx', () => fetchOtxPulses(feedConfig.otxApiKey));
+        }
 
-    if (feedConfig.vulncheckApiToken) {
-        await runFeed(results, 'vulncheck', () => fetchVulnCheckCves(feedConfig.vulncheckApiToken));
-    }
-    if (feedConfig.urlhausAuthKey) {
-        await runFeed(results, 'urlhaus', async () => {
-            const urlCount = await fetchUrlhausUrls(500, feedConfig.urlhausAuthKey);
-            const hostCount = await fetchUrlhausHosts(feedConfig.urlhausAuthKey);
-            return urlCount + hostCount;
-        });
-    }
-    if (feedConfig.threatfoxAuthKey) {
-        await runFeed(results, 'threatfox', () => fetchThreatfoxIocs(1, feedConfig.threatfoxAuthKey));
-    }
-    if (feedConfig.malwarebazaarAuthKey) {
-        await runFeed(results, 'malwarebazaar', () => fetchMalwareBazaar(100, feedConfig.malwarebazaarAuthKey));
-    }
-    if (feedConfig.virustotalApiKey && process.env.VIRUSTOTAL_QUERY) {
-        await runFeed(results, 'virustotal', () => fetchVirusTotal(feedConfig.virustotalApiKey));
-    }
-    if (feedConfig.greynoiseApiKey) {
-        await runFeed(results, 'greynoise', () => fetchGreyNoise(feedConfig.greynoiseApiKey));
-    }
-    if (feedConfig.shodanApiKey) {
-        await runFeed(results, 'shodan', () => fetchShodan(feedConfig.shodanApiKey));
-    }
-    if (feedConfig.censysApiId && feedConfig.censysApiSecret) {
-        await runFeed(results, 'censys', () => fetchCensys(feedConfig.censysApiId, feedConfig.censysApiSecret));
-    }
-    if (feedConfig.abuseipdbApiKey) {
-        await runFeed(results, 'abuseipdb', () => fetchAbuseIpdbBlacklist(feedConfig.abuseipdbApiKey));
-    }
-    if (feedConfig.otxApiKey) {
-        await runFeed(results, 'otx', () => fetchOtxPulses(feedConfig.otxApiKey));
-    }
+        try {
+            results.alerts = await processCveAlerts(feedConfig);
+        } catch (e) {
+            results.alerts = { sent: 0, skipped: false, error: e.message };
+        }
 
-    const metrics = finishRefreshMetrics();
-
-    try {
-        results.alerts = await processCveAlerts(feedConfig);
-    } catch (e) {
-        results.alerts = { sent: 0, skipped: false, error: e.message };
-    }
+        return results;
+    });
 
     results.summary = buildRefreshSummary(results, metrics);
+    saveLastRefreshSummary(results.summary);
     console.log('[Scheduler] Manual fetch complete:', results);
     return results;
 }

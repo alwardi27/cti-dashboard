@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getStats, getDb } from '../db/database.js';
+import { getLastRefreshSummary, getStats, getDb } from '../db/database.js';
 import { searchAll } from '../db/database.js';
 import { fetchAllFeeds } from '../workers/scheduler.js';
 import { getFeedConfig } from '../config/env.js';
@@ -9,6 +9,8 @@ const router = Router();
 router.get('/', async (req, res) => {
     try {
         const stats = getStats();
+        stats.lastRefresh = getLastRefreshSummary();
+        stats.latestFeedAt = getLatestFeedTimestamp();
         res.json({
             success: true,
             data: stats
@@ -22,7 +24,19 @@ router.get('/', async (req, res) => {
 router.get('/feeds', async (req, res) => {
     try {
         const db = getDb();
-        const stmt = db.prepare('SELECT * FROM feed_status ORDER BY source');
+        const stmt = db.prepare(`
+            SELECT *
+            FROM feed_status
+            ORDER BY
+                CASE status
+                    WHEN 'error' THEN 0
+                    WHEN 'pending' THEN 1
+                    WHEN 'skipped' THEN 2
+                    WHEN 'success' THEN 3
+                    ELSE 4
+                END,
+                source
+        `);
         const feeds = [];
         while (stmt.step()) {
             const feed = stmt.getAsObject();
@@ -74,6 +88,18 @@ router.get('/search', async (req, res) => {
 });
 
 export default router;
+
+function getLatestFeedTimestamp() {
+    const db = getDb();
+    const stmt = db.prepare(`
+        SELECT MAX(updated_at) AS latest
+        FROM feed_status
+        WHERE status != 'skipped'
+    `);
+    const latest = stmt.step() ? stmt.getAsObject().latest : null;
+    stmt.free();
+    return latest;
+}
 
 function shouldHideFeedStatus(feed) {
     if (feed?.source === 'urlhaus_hosts') return true;

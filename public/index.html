@@ -159,6 +159,43 @@
         .refresh-summary-value.good { color: var(--accent-primary); }
         .refresh-summary-value.warn { color: var(--severity-high); }
 
+        .triage-overview {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin: -16px 0 28px;
+        }
+
+        .triage-card {
+            padding: 12px 14px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+        }
+
+        .triage-card.alert { border-color: rgba(245, 158, 11, 0.55); }
+        .triage-card.error { border-color: rgba(239, 68, 68, 0.55); }
+
+        .triage-label {
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+
+        .triage-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 22px;
+            font-weight: 700;
+        }
+
+        .triage-value.alert { color: var(--severity-high); }
+        .triage-value.open { color: var(--progress-open); }
+        .triage-value.assigned { color: var(--progress-assigned); }
+        .triage-value.closed { color: var(--progress-closed); }
+        .triage-value.error { color: var(--severity-critical); }
+
         .main-tabs {
             display: flex; gap: 4px; margin-bottom: 16px;
             background: var(--bg-surface);
@@ -321,6 +358,8 @@
         .progress-badge.open { background: rgba(56, 189, 248, 0.15); color: var(--progress-open); border-color: rgba(56, 189, 248, 0.3); }
         .progress-badge.assigned { background: rgba(167, 139, 250, 0.15); color: var(--progress-assigned); border-color: rgba(167, 139, 250, 0.3); }
         .progress-badge.closed { background: rgba(34, 197, 94, 0.15); color: var(--progress-closed); border-color: rgba(34, 197, 94, 0.3); }
+        .progress-badge.needs-review { background: rgba(245, 158, 11, 0.14); color: var(--severity-high); border-color: rgba(245, 158, 11, 0.34); }
+        .progress-badge.untagged { background: rgba(148, 163, 184, 0.12); color: var(--text-muted); border-color: rgba(148, 163, 184, 0.25); }
 
         .progress-tag-controls { display: flex; flex-wrap: wrap; gap: 8px; }
         .progress-tag-btn {
@@ -371,6 +410,8 @@
         .feed-dot.error { background: var(--severity-critical); }
         .feed-dot.pending { background: var(--text-muted); }
         .feed-dot.skipped { background: var(--severity-high); }
+        .feed-card.error { border-color: rgba(239, 68, 68, 0.55); }
+        .feed-error { margin-top: 8px; color: var(--severity-critical); font-size: 12px; line-height: 1.5; word-break: break-word; }
 
         @media (max-width: 1400px) { .content-grid { grid-template-columns: 1fr; } }
 
@@ -391,7 +432,7 @@
                 <h1>Threat Intelligence Dashboard</h1>
             </div>
             <div class="header-meta">
-                <div class="last-updated" id="lastUpdated">Loading...</div>
+                <div class="last-updated" id="lastUpdated">Starting...</div>
                 <div class="controls">
                     <button class="btn" id="refreshBtn" onclick="manualRefresh()">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -425,11 +466,19 @@
         </div>
 
         <div class="refresh-summary" id="lastRefreshSummary">
-            <div class="refresh-summary-item"><div class="refresh-summary-label">Last Refresh</div><div class="refresh-summary-value">Not run yet</div></div>
+            <div class="refresh-summary-item"><div class="refresh-summary-label">Last Refresh</div><div class="refresh-summary-value">Loading</div></div>
             <div class="refresh-summary-item"><div class="refresh-summary-label">New CVEs</div><div class="refresh-summary-value">-</div></div>
             <div class="refresh-summary-item"><div class="refresh-summary-label">Updated CVEs</div><div class="refresh-summary-value">-</div></div>
             <div class="refresh-summary-item"><div class="refresh-summary-label">New IOCs</div><div class="refresh-summary-value">-</div></div>
             <div class="refresh-summary-item"><div class="refresh-summary-label">Feeds</div><div class="refresh-summary-value">-</div></div>
+        </div>
+
+        <div class="triage-overview" id="triageOverview">
+            <div class="triage-card alert"><div class="triage-label">Needs Review</div><div class="triage-value alert" id="triageNeedsReview">-</div></div>
+            <div class="triage-card"><div class="triage-label">Open</div><div class="triage-value open" id="triageOpen">-</div></div>
+            <div class="triage-card"><div class="triage-label">Assigned</div><div class="triage-value assigned" id="triageAssigned">-</div></div>
+            <div class="triage-card"><div class="triage-label">Closed</div><div class="triage-value closed" id="triageClosed">-</div></div>
+            <div class="triage-card error"><div class="triage-label">Feed Errors</div><div class="triage-value error" id="triageFeedErrors">-</div></div>
         </div>
 
         <div class="main-tabs">
@@ -462,6 +511,13 @@
                     <button class="filter-btn" data-time-range="7d" onclick="filterTimeRange('cves', '7d')">7d</button>
                     <button class="filter-btn" data-time-range="14d" onclick="filterTimeRange('cves', '14d')">14d</button>
                     <button class="filter-btn" data-time-range="30d" onclick="filterTimeRange('cves', '30d')">30d</button>
+                </div>
+                <div class="filter-row" id="cveProgressFilters">
+                    <button class="filter-btn active" data-cve-progress="all" onclick="filterCveProgress('all')">All Progress</button>
+                    <button class="filter-btn" data-cve-progress="needsReview" onclick="filterCveProgress('needsReview')">Needs Review</button>
+                    <button class="filter-btn" data-cve-progress="open" onclick="filterCveProgress('open')">Open</button>
+                    <button class="filter-btn" data-cve-progress="assigned" onclick="filterCveProgress('assigned')">Assigned</button>
+                    <button class="filter-btn" data-cve-progress="closed" onclick="filterCveProgress('closed')">Closed</button>
                 </div>
                 <div class="list-container" id="cveList"><div class="loader"><div class="spinner"></div></div></div>
             </div>
@@ -525,10 +581,10 @@
                     </div>
                 </div>
                 <div class="filter-row" id="progressStatusFilters">
-                    <button class="filter-btn active" data-progress-status="all" onclick="filterProgress('all')">All</button>
-                    <button class="filter-btn" data-progress-status="open" onclick="filterProgress('open')">Open</button>
-                    <button class="filter-btn" data-progress-status="assigned" onclick="filterProgress('assigned')">Assigned</button>
-                    <button class="filter-btn" data-progress-status="closed" onclick="filterProgress('closed')">Closed</button>
+                    <button class="filter-btn active" data-progress-status="all" data-label="All" onclick="filterProgress('all')">All</button>
+                    <button class="filter-btn" data-progress-status="open" data-label="Open" onclick="filterProgress('open')">Open</button>
+                    <button class="filter-btn" data-progress-status="assigned" data-label="Assigned" onclick="filterProgress('assigned')">Assigned</button>
+                    <button class="filter-btn" data-progress-status="closed" data-label="Closed" onclick="filterProgress('closed')">Closed</button>
                     <span style="margin-left: auto; font-size: 11px; color: var(--text-muted);" id="progressCount">0 items</span>
                 </div>
                 <div class="list-container" id="progressList"><div class="loader"><div class="spinner"></div></div></div>
@@ -564,9 +620,11 @@
         let selectedProgressItem = null;
         let selectedIocType = 'all';
         let selectedSeverity = 'all';
+        let selectedCveProgress = 'all';
         let selectedProgressStatus = 'all';
         let selectedCveTimeRange = 'all';
         let selectedIocTimeRange = 'all';
+        let latestTriageStats = { needsReview: 0, open: 0, assigned: 0, closed: 0, feedErrors: 0 };
         let lastRefresh = null;
         let activeTab = 'cves';
         let autoRefreshEnabled = false;
@@ -574,14 +632,35 @@
         let isRefreshing = false;
 
         const API_BASE = '/api';
+        const REQUEST_TIMEOUT_MS = 45000;
+        const REFRESH_TIMEOUT_MS = 180000;
+
+        async function fetchJson(url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+            try {
+                const res = await fetch(url, { ...options, signal: controller.signal });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || data.success === false) {
+                    throw new Error(data.error || `Request failed with status ${res.status}`);
+                }
+                return data;
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    throw new Error('Request timed out. The server may still be working; try again in a moment.');
+                }
+                throw error;
+            } finally {
+                clearTimeout(timeout);
+            }
+        }
 
         async function fetchStats() {
             try {
-                const res = await fetch(`${API_BASE}/stats`);
-                const data = await res.json();
-                if (!res.ok || !data.success) throw new Error(data.error || 'Stats request failed');
+                const data = await fetchJson(`${API_BASE}/stats`);
 
-                const { cves, iocs, recent24h } = data.data;
+                const { cves, iocs, recent24h, triage, lastRefresh, latestFeedAt } = data.data;
                 document.getElementById('statTotalCves').textContent = cves.total || 0;
                 document.getElementById('statCritical').textContent = cves.critical || 0;
                 document.getElementById('statHigh').textContent = cves.high || 0;
@@ -593,24 +672,32 @@
                 document.getElementById('statHashes').textContent = iocMap.hash || 0;
                 document.getElementById('statIps').textContent = iocMap.ip || 0;
                 document.getElementById('statDomains').textContent = iocMap.domain || 0;
+
+                latestTriageStats = triage || latestTriageStats;
+                renderTriageOverview(latestTriageStats);
+                applyLoadedState(lastRefresh, latestFeedAt);
             } catch (e) {
+                document.getElementById('lastUpdated').textContent = 'Stats unavailable';
                 setRefreshStatus(`Stats unavailable: ${e.message}`, 'error');
                 console.error('Stats error:', e);
             }
         }
 
         async function fetchCves(search = '') {
-            const params = new URLSearchParams({ limit: 200, offset: 0 });
+            const params = new URLSearchParams({ limit: 200, offset: 0, sort: 'triage' });
             if (selectedSeverity !== 'all') params.set('severity', selectedSeverity);
+            if (selectedCveProgress === 'needsReview') {
+                params.set('needsReview', 'true');
+            } else if (selectedCveProgress !== 'all') {
+                params.set('progressStatus', selectedCveProgress);
+            }
             const fromDate = getRangeStart(selectedCveTimeRange);
             if (fromDate) params.set('fromDate', fromDate);
             if (search) params.set('search', search);
 
             try {
                 document.getElementById('cveList').innerHTML = '<div class="loader"><div class="spinner"></div></div>';
-                const res = await fetch(`${API_BASE}/cves?${params}`);
-                const data = await res.json();
-                if (!res.ok || !data.success) throw new Error(data.error || 'CVE request failed');
+                const data = await fetchJson(`${API_BASE}/cves?${params}`);
                 allCves = data.data || [];
                 filteredCves = [...allCves];
                 if (selectedItem?.id && !filteredCves.some(cve => cve.id === selectedItem.id)) {
@@ -637,7 +724,7 @@
                     <div class="item-header">
                         <a href="${sourceUrlForCve(cve)}" target="_blank" rel="noopener noreferrer" class="item-id" onclick="event.stopPropagation()">${escapeHtml(cve.id)}</a>
                         <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">
-                            ${renderProgressBadge(cve.progress_status)}
+                            ${renderProgressBadge(cve.progress_status, cve)}
                             <span class="severity-badge ${escapeHtml(cve.severity || 'low')}">${escapeHtml(cve.severity || 'low')}</span>
                         </div>
                     </div>
@@ -645,6 +732,7 @@
                     <div class="item-meta">
                         <span>CVSS: <span class="cvss-score">${(cve.cvss_score || 0).toFixed(1)}</span></span>
                         <span>${escapeHtml(cve.source?.toUpperCase() || 'UNKNOWN')}</span>
+                        <span>Notes: ${cve.progress_note_count || 0}</span>
                         <span>${formatDate(cve.published_at)}</span>
                     </div>
                 </div>
@@ -656,10 +744,20 @@
             if (cve) selectCve(cve);
         }
 
-        function selectCve(cve) {
+        async function selectCve(cve) {
             selectedItem = cve;
             renderCveList();
             renderCveDetail(cve);
+            try {
+                const data = await fetchJson(`${API_BASE}/cves/${encodeURIComponent(cve.id)}/progress`);
+                if (selectedItem?.id === cve.id) {
+                    selectedItem = data.data;
+                    renderCveDetail(data.data);
+                    applyProgressUpdate(data.data, { skipRenderDetail: true });
+                }
+            } catch (e) {
+                setRefreshStatus(`Could not load CVE notes: ${e.message}`, 'error');
+            }
         }
 
         function renderCveDetail(cve) {
@@ -670,7 +768,7 @@
                         <div class="detail-id">${escapeHtml(cve.id)}</div>
                         <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;">
                             <span class="severity-badge ${escapeHtml(cve.severity || 'low')}">${escapeHtml(cve.severity?.toUpperCase() || 'LOW')}</span>
-                            ${renderProgressBadge(cve.progress_status)}
+                            ${renderProgressBadge(cve.progress_status, cve)}
                         </div>
                         <p class="detail-desc">${escapeHtml(cve.description || 'No description available')}</p>
                     </div>
@@ -701,6 +799,10 @@
                         ${renderProgressControls(cve)}
                     </div>
                     <div class="detail-section">
+                        <h3 class="detail-section-title">Progress Notes</h3>
+                        ${renderCveNoteWorkspace(cve)}
+                    </div>
+                    <div class="detail-section">
                         <h3 class="detail-section-title">Actions</h3>
                         <a href="${sourceUrlForCve(cve)}" target="_blank" rel="noopener noreferrer" class="btn" style="display: inline-flex;">
                             View Source
@@ -711,8 +813,9 @@
             `;
         }
 
-        function renderProgressBadge(status) {
-            if (!status) return '';
+        function renderProgressBadge(status, cve = null) {
+            if (!status && isNeedsReview(cve)) return '<span class="progress-badge needs-review">Needs Review</span>';
+            if (!status) return '<span class="progress-badge untagged">Untagged</span>';
             return `<span class="progress-badge ${escapeHtml(status)}">${escapeHtml(status)}</span>`;
         }
 
@@ -729,19 +832,32 @@
             `;
         }
 
+        function renderCveNoteWorkspace(cve) {
+            if (!cve.progress_status) {
+                return '<div class="empty-state" style="padding: 20px;">Set Open, Assigned, or Closed to add progress notes.</div>';
+            }
+
+            return `
+                <textarea class="note-input" id="cveNoteInput" maxlength="2000" placeholder="Add progress note..."></textarea>
+                <button class="btn" onclick="addProgressNote('${escapeJsArg(cve.id)}', 'cveNoteInput', 'cve')">Add Note</button>
+                <div style="height: 12px;"></div>
+                ${renderProgressNotes(cve.notes || [])}
+            `;
+        }
+
         async function updateCveProgress(cveId, status) {
             try {
-                const res = await fetch(`${API_BASE}/cves/${encodeURIComponent(cveId)}/progress`, {
+                const data = await fetchJson(`${API_BASE}/cves/${encodeURIComponent(cveId)}/progress`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ status })
                 });
-                const data = await res.json();
-                if (!res.ok || !data.success) throw new Error(data.error || 'Progress update failed');
 
                 applyProgressUpdate(data.data);
                 const message = status ? `${cveId} marked ${status}.` : `${cveId} progress tag cleared.`;
                 setRefreshStatus(message, 'success');
+                await fetchStats();
+                await fetchCves(document.getElementById('cveSearch')?.value || '');
 
                 if (activeTab === 'progress') {
                     await fetchProgress(document.getElementById('progressSearch')?.value || '');
@@ -757,13 +873,15 @@
             }
         }
 
-        function applyProgressUpdate(progress) {
+        function applyProgressUpdate(progress, options = {}) {
             if (!progress?.id) return;
             const fields = {
                 progress_status: progress.progress_status || null,
                 progress_created_at: progress.progress_created_at || null,
                 progress_updated_at: progress.progress_updated_at || null,
-                progress_note_count: progress.progress_note_count || 0
+                progress_note_count: progress.progress_note_count || 0,
+                latest_note: progress.latest_note || null,
+                latest_note_at: progress.latest_note_at || null
             };
 
             allCves = allCves.map(cve => cve.id === progress.id ? { ...cve, ...fields } : cve);
@@ -772,9 +890,9 @@
             filteredProgressItems = filteredProgressItems.map(cve => cve.id === progress.id ? { ...cve, ...progress } : cve);
 
             if (selectedItem?.id === progress.id) {
-                selectedItem = { ...selectedItem, ...fields };
+                selectedItem = { ...selectedItem, ...progress, ...fields };
                 renderCveList();
-                renderCveDetail(selectedItem);
+                if (!options.skipRenderDetail) renderCveDetail(selectedItem);
             } else if (activeTab === 'cves') {
                 renderCveList();
             }
@@ -789,9 +907,7 @@
 
             try {
                 document.getElementById('iocList').innerHTML = '<div class="loader"><div class="spinner"></div></div>';
-                const res = await fetch(`${API_BASE}/iocs?${params}`);
-                const data = await res.json();
-                if (!res.ok || !data.success) throw new Error(data.error || 'IOC request failed');
+                const data = await fetchJson(`${API_BASE}/iocs?${params}`);
                 allIocs = data.data || [];
                 filteredIocs = [...allIocs];
                 renderIocList();
@@ -892,9 +1008,7 @@
 
             try {
                 document.getElementById('progressList').innerHTML = '<div class="loader"><div class="spinner"></div></div>';
-                const res = await fetch(`${API_BASE}/cves/progress?${params}`);
-                const data = await res.json();
-                if (!res.ok || !data.success) throw new Error(data.error || 'Progress request failed');
+                const data = await fetchJson(`${API_BASE}/cves/progress?${params}`);
                 progressItems = data.data || [];
                 filteredProgressItems = [...progressItems];
                 if (selectedProgressItem?.id && !filteredProgressItems.some(cve => cve.id === selectedProgressItem.id)) {
@@ -921,7 +1035,7 @@
                     <div class="item-header">
                         <a href="${sourceUrlForCve(cve)}" target="_blank" rel="noopener noreferrer" class="item-id" onclick="event.stopPropagation()">${escapeHtml(cve.id)}</a>
                         <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">
-                            ${renderProgressBadge(cve.progress_status)}
+                            ${renderProgressBadge(cve.progress_status, cve)}
                             <span class="severity-badge ${escapeHtml(cve.severity || 'low')}">${escapeHtml(cve.severity || 'low')}</span>
                         </div>
                     </div>
@@ -946,9 +1060,7 @@
 
         async function fetchProgressDetail(cveId) {
             try {
-                const res = await fetch(`${API_BASE}/cves/${encodeURIComponent(cveId)}/progress`);
-                const data = await res.json();
-                if (!res.ok || !data.success) throw new Error(data.error || 'Progress detail request failed');
+                const data = await fetchJson(`${API_BASE}/cves/${encodeURIComponent(cveId)}/progress`);
                 selectedProgressItem = data.data;
                 renderProgressDetail(data.data);
             } catch (e) {
@@ -963,7 +1075,7 @@
                     <div class="detail-header">
                         <div class="detail-id">${escapeHtml(cve.id)}</div>
                         <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;">
-                            ${renderProgressBadge(cve.progress_status)}
+                            ${renderProgressBadge(cve.progress_status, cve)}
                             <span class="severity-badge ${escapeHtml(cve.severity || 'low')}">${escapeHtml(cve.severity?.toUpperCase() || 'LOW')}</span>
                         </div>
                         <p class="detail-desc">${escapeHtml(cve.description || 'No description available')}</p>
@@ -975,7 +1087,7 @@
                     <div class="detail-section">
                         <h3 class="detail-section-title">Add Note</h3>
                         <textarea class="note-input" id="progressNoteInput" maxlength="2000" placeholder="Add progress note..."></textarea>
-                        <button class="btn" onclick="addProgressNote('${escapeJsArg(cve.id)}')">Add Note</button>
+                        <button class="btn" onclick="addProgressNote('${escapeJsArg(cve.id)}', 'progressNoteInput', 'progress')">Add Note</button>
                     </div>
                     <div class="detail-section">
                         <h3 class="detail-section-title">Notes</h3>
@@ -1000,22 +1112,29 @@
             `;
         }
 
-        async function addProgressNote(cveId) {
-            const input = document.getElementById('progressNoteInput');
+        async function addProgressNote(cveId, inputId = 'progressNoteInput', context = 'progress') {
+            const input = document.getElementById(inputId);
             const note = input?.value.trim() || '';
             if (!note) return;
 
             try {
-                const res = await fetch(`${API_BASE}/cves/${encodeURIComponent(cveId)}/progress/notes`, {
+                const data = await fetchJson(`${API_BASE}/cves/${encodeURIComponent(cveId)}/progress/notes`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ note })
                 });
-                const data = await res.json();
-                if (!res.ok || !data.success) throw new Error(data.error || 'Note request failed');
                 input.value = '';
-                selectedProgressItem = data.data;
-                renderProgressDetail(data.data);
+                applyProgressUpdate(data.data);
+                if (context === 'progress' || selectedProgressItem?.id === cveId) {
+                    selectedProgressItem = data.data;
+                    renderProgressDetail(data.data);
+                }
+                if (context === 'cve' || selectedItem?.id === cveId) {
+                    selectedItem = data.data;
+                    renderCveDetail(data.data);
+                }
+                await fetchStats();
+                await fetchCves(document.getElementById('cveSearch')?.value || '');
                 await fetchProgress(document.getElementById('progressSearch')?.value || '');
                 setRefreshStatus(`Note added to ${cveId}.`, 'success');
             } catch (e) {
@@ -1025,9 +1144,7 @@
 
         async function fetchFeedStatus() {
             try {
-                const res = await fetch(`${API_BASE}/stats/feeds`);
-                const data = await res.json();
-                if (!res.ok || !data.success) throw new Error(data.error || 'Feed status request failed');
+                const data = await fetchJson(`${API_BASE}/stats/feeds`);
                 renderFeedStatus(data.data || []);
             } catch (e) {
                 document.getElementById('feedStatusContent').innerHTML = `<div class="error-state"><p>Failed to load feed status</p><p>${escapeHtml(e.message)}</p></div>`;
@@ -1041,19 +1158,26 @@
                 return;
             }
 
+            const sortedFeeds = [...feeds].sort((a, b) => {
+                const order = { error: 0, pending: 1, skipped: 2, success: 3 };
+                return (order[a.status] ?? 4) - (order[b.status] ?? 4) || String(a.source || '').localeCompare(String(b.source || ''));
+            });
+
             container.innerHTML = `
                 <div class="detail-section">
                     <div class="metrics-grid" style="grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));">
-                        ${feeds.map(feed => `
-                            <div class="metric-item">
+                        ${sortedFeeds.map(feed => `
+                            <div class="metric-item feed-card ${escapeHtml(feed.status || 'pending')}">
                                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                                     <span style="font-family: 'JetBrains Mono', monospace; font-weight: 600;">${escapeHtml(feed.source?.toUpperCase() || 'UNKNOWN')}</span>
                                     <span class="feed-dot ${escapeHtml(feed.status || 'pending')}"></span>
                                 </div>
                                 <div style="font-size: 12px; color: var(--text-muted);">
-                                    <div>Last fetch: ${formatDate(feed.last_fetch)}</div>
-                                    <div>Items: ${feed.last_count || 0}</div>
-                                    ${feed.error_message ? `<div style="color: var(--severity-critical);">Error: ${escapeHtml(feed.error_message)}</div>` : ''}
+                                    <div>Status: ${escapeHtml(feed.status || 'pending')}</div>
+                                    <div>Last attempt: ${formatDate(feed.last_fetch)}</div>
+                                    <div>Last attempt items: ${feed.last_count || 0}</div>
+                                    <div>Last success: ${feed.last_successful_fetch ? `${formatDate(feed.last_successful_fetch)} (${feed.last_successful_count || 0} items)` : 'Not available yet'}</div>
+                                    ${feed.error_message ? `<div class="feed-error">Error: ${escapeHtml(feed.error_message)}</div>` : ''}
                                 </div>
                             </div>
                         `).join('')}
@@ -1082,6 +1206,14 @@
             selectedSeverity = filter;
             document.querySelectorAll('#cveSeverityFilters .filter-btn').forEach(b => {
                 b.classList.toggle('active', b.dataset.filter === filter);
+            });
+            fetchCves(document.getElementById('cveSearch')?.value || '');
+        }
+
+        function filterCveProgress(status) {
+            selectedCveProgress = status;
+            document.querySelectorAll('#cveProgressFilters .filter-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.cveProgress === status);
             });
             fetchCves(document.getElementById('cveSearch')?.value || '');
         }
@@ -1142,7 +1274,10 @@
         }
 
         async function manualRefresh() {
-            if (isRefreshing) return;
+            if (isRefreshing) {
+                setRefreshStatus('Refresh already running. Waiting for the current run to finish...', '');
+                return;
+            }
             isRefreshing = true;
             const btn = document.getElementById('refreshBtn');
             btn.classList.add('loading');
@@ -1151,9 +1286,7 @@
             setRefreshStatus('Fetching public CTI feeds. This can take a little while...', '');
 
             try {
-                const res = await fetch(`${API_BASE}/stats/feeds/refresh`, { method: 'POST' });
-                const data = await res.json();
-                if (!res.ok || !data.success) throw new Error(data.error || 'Refresh failed');
+                const data = await fetchJson(`${API_BASE}/stats/feeds/refresh`, { method: 'POST' }, REFRESH_TIMEOUT_MS);
 
                 lastRefresh = new Date();
                 document.getElementById('lastUpdated').textContent = `Updated: ${formatDate(lastRefresh)}`;
@@ -1162,18 +1295,18 @@
             } catch (e) {
                 setRefreshStatus(`Refresh failed: ${e.message}`, 'error');
                 console.error('Refresh error:', e);
+            } finally {
+                btn.classList.remove('loading');
+                btn.disabled = false;
+                btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Refresh';
+                isRefreshing = false;
+
+                fetchStats();
+                if (activeTab === 'cves') fetchCves(document.getElementById('cveSearch')?.value || '');
+                if (activeTab === 'iocs') fetchIocs(selectedIocType, document.getElementById('iocSearch')?.value || '');
+                if (activeTab === 'progress') fetchProgress(document.getElementById('progressSearch')?.value || '');
+                if (activeTab === 'feeds') fetchFeedStatus();
             }
-
-            btn.classList.remove('loading');
-            btn.disabled = false;
-            btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Refresh';
-            isRefreshing = false;
-
-            fetchStats();
-            if (activeTab === 'cves') fetchCves(document.getElementById('cveSearch')?.value || '');
-            if (activeTab === 'iocs') fetchIocs(selectedIocType, document.getElementById('iocSearch')?.value || '');
-            if (activeTab === 'progress') fetchProgress(document.getElementById('progressSearch')?.value || '');
-            if (activeTab === 'feeds') fetchFeedStatus();
         }
 
         function toggleAutoRefresh() {
@@ -1256,6 +1389,90 @@
             const status = document.getElementById('refreshStatus');
             status.className = `status-line ${type || ''}`;
             status.textContent = message || '';
+        }
+
+        function renderTriageOverview(triage) {
+            const safe = {
+                needsReview: triage?.needsReview || 0,
+                open: triage?.open || 0,
+                assigned: triage?.assigned || 0,
+                closed: triage?.closed || 0,
+                feedErrors: triage?.feedErrors || 0
+            };
+
+            document.getElementById('triageNeedsReview').textContent = safe.needsReview;
+            document.getElementById('triageOpen').textContent = safe.open;
+            document.getElementById('triageAssigned').textContent = safe.assigned;
+            document.getElementById('triageClosed').textContent = safe.closed;
+            document.getElementById('triageFeedErrors').textContent = safe.feedErrors;
+            renderProgressStatusCounts(safe);
+        }
+
+        function renderProgressStatusCounts(triage) {
+            const total = (triage.open || 0) + (triage.assigned || 0) + (triage.closed || 0);
+            const counts = {
+                all: total,
+                open: triage.open || 0,
+                assigned: triage.assigned || 0,
+                closed: triage.closed || 0
+            };
+
+            document.querySelectorAll('#progressStatusFilters .filter-btn').forEach(button => {
+                const key = button.dataset.progressStatus;
+                const label = button.dataset.label || button.textContent;
+                button.textContent = `${label} (${counts[key] || 0})`;
+            });
+        }
+
+        function isNeedsReview(cve) {
+            return !cve?.progress_status && ['critical', 'high'].includes(String(cve?.severity || '').toLowerCase());
+        }
+
+        function applyLoadedState(lastRefreshSummary, latestFeedAt) {
+            if (lastRefreshSummary?.finished_at) {
+                lastRefresh = new Date(lastRefreshSummary.finished_at);
+                document.getElementById('lastUpdated').textContent = `Updated: ${formatDate(lastRefreshSummary.finished_at)}`;
+                renderLastRefreshSummary(lastRefreshSummary);
+                return;
+            }
+
+            if (latestFeedAt) {
+                document.getElementById('lastUpdated').textContent = `Loaded: ${formatDate(latestFeedAt)}`;
+                renderNoRefreshSummary(latestFeedAt);
+                return;
+            }
+
+            document.getElementById('lastUpdated').textContent = 'Loaded';
+            renderNoRefreshSummary(null);
+        }
+
+        function renderNoRefreshSummary(latestFeedAt) {
+            const container = document.getElementById('lastRefreshSummary');
+            if (!container) return;
+
+            const latest = latestFeedAt ? formatDate(latestFeedAt) : 'No feed run yet';
+            container.innerHTML = `
+                <div class="refresh-summary-item">
+                    <div class="refresh-summary-label">Latest Feed Data</div>
+                    <div class="refresh-summary-value">${escapeHtml(latest)}</div>
+                </div>
+                <div class="refresh-summary-item">
+                    <div class="refresh-summary-label">New CVEs</div>
+                    <div class="refresh-summary-value">Refresh to calculate</div>
+                </div>
+                <div class="refresh-summary-item">
+                    <div class="refresh-summary-label">Updated CVEs</div>
+                    <div class="refresh-summary-value">Refresh to calculate</div>
+                </div>
+                <div class="refresh-summary-item">
+                    <div class="refresh-summary-label">New IOCs</div>
+                    <div class="refresh-summary-value">Refresh to calculate</div>
+                </div>
+                <div class="refresh-summary-item">
+                    <div class="refresh-summary-label">Feeds</div>
+                    <div class="refresh-summary-value">Ready</div>
+                </div>
+            `;
         }
 
         function renderLastRefreshSummary(summary) {

@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS feed_status (
     source TEXT PRIMARY KEY,
     last_fetch DATETIME,
     last_count INTEGER DEFAULT 0,
+    last_successful_fetch DATETIME,
+    last_successful_count INTEGER DEFAULT 0,
     status TEXT DEFAULT 'pending',
     error_message TEXT,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -68,6 +70,12 @@ CREATE TABLE IF NOT EXISTS cve_progress_notes (
     note TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (cve_id) REFERENCES cves(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS app_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_cves_source ON cves(source);

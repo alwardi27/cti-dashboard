@@ -13,13 +13,16 @@ const router = Router();
 
 router.get('/', async (req, res) => {
     try {
-        const { source, severity, search, fromDate, limit, offset } = req.query;
+        const { source, severity, search, fromDate, progressStatus, needsReview, sort, limit, offset } = req.query;
 
         const filters = {
             source: source || null,
             severity: severity || null,
             search: search || null,
             fromDate: fromDate || null,
+            progressStatus: progressStatus || null,
+            needsReview: needsReview === 'true' || needsReview === '1',
+            sort: sort || null,
             limit,
             offset
         };

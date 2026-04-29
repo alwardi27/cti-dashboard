@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { getFeedConfig } from './config/env.js';
 import { initializeDb } from './db/database.js';
-import { startScheduler } from './workers/scheduler.js';
+import { startScheduler, stopScheduler } from './workers/scheduler.js';
 import cvesRouter from './routes/cves.js';
 import iocsRouter from './routes/iocs.js';
 import statsRouter from './routes/stats.js';
@@ -36,6 +36,27 @@ app.get('*', (req, res) => {
     res.sendFile(join(__dirname, '../public/index.html'));
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`[Server] CTI Dashboard running at http://localhost:${PORT}`);
 });
+
+server.on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+        console.error(`[Server] Port ${PORT} is already in use. Stop the existing dashboard process or set PORT to another value.`);
+    } else {
+        console.error('[Server] Startup error:', error.message);
+    }
+    process.exit(1);
+});
+
+function shutdown(signal) {
+    console.log(`[Server] ${signal} received, shutting down...`);
+    stopScheduler();
+    server.close(() => {
+        console.log('[Server] Shutdown complete');
+        process.exit(0);
+    });
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
