@@ -1,23 +1,64 @@
 import initSqlJs from 'sql.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { copyFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const DB_PATH = join(__dirname, '../../data/cti.db');
+const DEFAULT_DB_PATH = join(__dirname, '../../data/cti.db');
 const SCHEMA_PATH = join(__dirname, 'schema.sql');
 const CVE_PROGRESS_STATUSES = ['open', 'assigned', 'closed'];
+const CVE_SOURCE_PRIORITIES = {
+    nvd: 100,
+    cisa_kev: 90,
+    vulncheck: 85,
+    github: 80,
+    shodan: 55,
+    censys: 55,
+    virustotal: 50,
+    greynoise: 45,
+    otx: 40,
+    osv: 75
+};
+const KNOWN_FEED_SOURCES = [
+    'nvd',
+    'cisa_kev',
+    'github',
+    'vulncheck',
+    'urlhaus',
+    'threatfox',
+    'malwarebazaar',
+    'feodo',
+    'sslbl',
+    'epss',
+    'osv',
+    'virustotal',
+    'greynoise',
+    'shodan',
+    'censys',
+    'abuseipdb',
+    'otx'
+];
 const CVE_PROGRESS_SELECT = `
     cves.*,
+    COALESCE(source_summary.sources_csv, cves.source) AS sources_csv,
+    COALESCE(source_summary.is_kev, CASE WHEN cves.source = 'cisa_kev' THEN 1 ELSE 0 END) AS is_kev,
     progress.status AS progress_status,
     progress.created_at AS progress_created_at,
     progress.updated_at AS progress_updated_at,
     COALESCE(note_counts.note_count, 0) AS progress_note_count
 `;
 const CVE_PROGRESS_JOINS = `
+    LEFT JOIN (
+        SELECT
+            cve_id,
+            GROUP_CONCAT(source) AS sources_csv,
+            MAX(CASE WHEN source = 'cisa_kev' THEN 1 ELSE 0 END) AS is_kev
+        FROM cve_sources
+        GROUP BY cve_id
+    ) source_summary ON source_summary.cve_id = cves.id
     LEFT JOIN cve_progress_tags progress ON progress.cve_id = cves.id
     LEFT JOIN (
         SELECT cve_id, COUNT(*) AS note_count
@@ -29,13 +70,17 @@ const CVE_PROGRESS_JOINS = `
 let db = null;
 let SQL = null;
 let fallbackRefreshMetrics = null;
+let deferredSaveDepth = 0;
+let deferredSavePending = false;
+let saveSequence = 0;
 const refreshMetricsStore = new AsyncLocalStorage();
 
 export async function initializeDb() {
     SQL = await initSqlJs();
+    const dbPath = getDbPath();
 
-    if (existsSync(DB_PATH)) {
-        const buffer = readFileSync(DB_PATH);
+    if (existsSync(dbPath)) {
+        const buffer = readFileSync(dbPath);
         db = new SQL.Database(buffer);
     } else {
         db = new SQL.Database();
@@ -44,20 +89,23 @@ export async function initializeDb() {
     const schema = readFileSync(SCHEMA_PATH, 'utf-8');
     db.run(schema);
     migrateSchema();
+    backfillSearchIndexIfEmpty();
+    markSchemaVersion(1);
     db.run('CREATE INDEX IF NOT EXISTS idx_cve_alerts_status ON cve_alerts(status);');
     saveDb();
     return db;
 }
 
 function migrateSchema() {
+    ensureSchemaMigrationTable();
     const cvesSchema = getTableSql('cves');
-    const hasExpandedCveSources = cvesSchema && cvesSchema.includes('vulncheck') && cvesSchema.includes('greynoise') && cvesSchema.includes('otx');
+    const hasExpandedCveSources = cvesSchema && cvesSchema.includes('vulncheck') && cvesSchema.includes('greynoise') && cvesSchema.includes('otx') && cvesSchema.includes('osv');
 
     if (!hasExpandedCveSources) {
         db.run(`
             CREATE TABLE cves_new (
                 id TEXT PRIMARY KEY,
-                source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx')),
+                source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv')),
                 description TEXT,
                 cvss_score REAL,
                 cvss_vector TEXT,
@@ -81,6 +129,52 @@ function migrateSchema() {
 
     addColumnIfMissing('feed_status', 'last_successful_fetch', 'DATETIME');
     addColumnIfMissing('feed_status', 'last_successful_count', 'INTEGER DEFAULT 0');
+    ensureFeedStatusRows();
+    db.run(`
+        CREATE TABLE IF NOT EXISTS cve_sources (
+            cve_id TEXT NOT NULL,
+            source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv')),
+            first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (cve_id, source),
+            FOREIGN KEY (cve_id) REFERENCES cves(id) ON DELETE CASCADE
+        );
+    `);
+    migrateCveSourcesSchema();
+    db.run('CREATE INDEX IF NOT EXISTS idx_cve_sources_source ON cve_sources(source);');
+    db.run(`
+        CREATE TABLE IF NOT EXISTS search_documents (
+            doc_id TEXT PRIMARY KEY,
+            entity_type TEXT NOT NULL CHECK(entity_type IN ('cve', 'ioc')),
+            entity_id TEXT NOT NULL,
+            source TEXT,
+            title TEXT,
+            summary TEXT,
+            url TEXT,
+            metadata TEXT,
+            date DATETIME,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    `);
+    db.run(`
+        CREATE TABLE IF NOT EXISTS search_terms (
+            doc_id TEXT NOT NULL,
+            term TEXT NOT NULL,
+            weight INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (doc_id, term),
+            FOREIGN KEY (doc_id) REFERENCES search_documents(doc_id) ON DELETE CASCADE
+        );
+    `);
+    db.run('CREATE INDEX IF NOT EXISTS idx_search_documents_type ON search_documents(entity_type);');
+    db.run('CREATE INDEX IF NOT EXISTS idx_search_documents_source ON search_documents(source);');
+    db.run('CREATE INDEX IF NOT EXISTS idx_search_documents_date ON search_documents(date);');
+    db.run('CREATE INDEX IF NOT EXISTS idx_search_terms_term ON search_terms(term);');
+    db.run(`
+        INSERT OR IGNORE INTO cve_sources (cve_id, source, first_seen, last_seen)
+        SELECT id, source, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
+        FROM cves
+        WHERE source IS NOT NULL
+    `);
     db.run(`
         UPDATE feed_status
         SET last_successful_fetch = COALESCE(last_successful_fetch, last_fetch),
@@ -90,6 +184,42 @@ function migrateSchema() {
             END
         WHERE status = 'success'
     `);
+}
+
+function ensureSchemaMigrationTable() {
+    db.run(`
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    `);
+}
+
+function markSchemaVersion(version) {
+    db.run('INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, datetime(\'now\'))', [version]);
+}
+
+function migrateCveSourcesSchema() {
+    const cveSourcesSchema = getTableSql('cve_sources');
+    if (!cveSourcesSchema || cveSourcesSchema.includes('osv')) return;
+
+    db.run(`
+        CREATE TABLE cve_sources_new (
+            cve_id TEXT NOT NULL,
+            source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv')),
+            first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (cve_id, source),
+            FOREIGN KEY (cve_id) REFERENCES cves(id) ON DELETE CASCADE
+        );
+    `);
+    db.run(`
+        INSERT OR IGNORE INTO cve_sources_new (cve_id, source, first_seen, last_seen)
+        SELECT cve_id, source, first_seen, last_seen
+        FROM cve_sources;
+    `);
+    db.run('DROP TABLE cve_sources;');
+    db.run('ALTER TABLE cve_sources_new RENAME TO cve_sources;');
 }
 
 function getTableSql(tableName) {
@@ -195,12 +325,69 @@ function recordRefreshWrite(source, category, inserted) {
     activeRefreshMetrics.by_source[normalizedSource][category][bucket]++;
 }
 
-export function saveDb() {
+export function saveDb(options = {}) {
     if (!db) return;
-    mkdirSync(dirname(DB_PATH), { recursive: true });
+    if (!options.force && deferredSaveDepth > 0) {
+        deferredSavePending = true;
+        return;
+    }
+
+    const dbPath = getDbPath();
+    mkdirSync(dirname(dbPath), { recursive: true });
     const data = db.export();
     const buffer = Buffer.from(data);
-    writeFileSync(DB_PATH, buffer);
+    const tempPath = `${dbPath}.tmp-${process.pid}-${Date.now()}-${saveSequence++}`;
+    try {
+        writeFileSync(tempPath, buffer);
+        renameSync(tempPath, dbPath);
+    } catch (error) {
+        if (shouldFallbackToCopy(error)) {
+            try {
+                copyFileSync(tempPath, dbPath);
+                cleanupTempFile(tempPath);
+                return;
+            } catch (fallbackError) {
+                cleanupTempFile(tempPath);
+                fallbackError.message = `${fallbackError.message}; fallback after atomic rename failed: ${error.message}`;
+                throw fallbackError;
+            }
+        }
+        cleanupTempFile(tempPath);
+        throw error;
+    }
+}
+
+function cleanupTempFile(tempPath) {
+    if (existsSync(tempPath)) {
+        try {
+            unlinkSync(tempPath);
+        } catch {
+            // Best effort cleanup; keep the original database file intact.
+        }
+    }
+}
+
+function shouldFallbackToCopy(error) {
+    return process.platform === 'win32' && ['EPERM', 'EACCES', 'EBUSY'].includes(error?.code);
+}
+
+function ensureFeedStatusRows() {
+    for (const source of KNOWN_FEED_SOURCES) {
+        db.run(`
+            INSERT OR IGNORE INTO feed_status (
+                source,
+                status,
+                last_count,
+                last_successful_count,
+                updated_at
+            )
+            VALUES (?, 'pending', 0, 0, datetime('now'))
+        `, [source]);
+    }
+}
+
+export function getDbPath() {
+    return resolve(process.env.CTI_DB_PATH || DEFAULT_DB_PATH);
 }
 
 function createRefreshMetrics() {
@@ -213,18 +400,33 @@ function createRefreshMetrics() {
     };
 }
 
+async function withDeferredDbSave(callback) {
+    deferredSaveDepth++;
+    try {
+        return await callback();
+    } finally {
+        deferredSaveDepth--;
+        if (deferredSaveDepth === 0 && deferredSavePending) {
+            deferredSavePending = false;
+            saveDb({ force: true });
+        }
+    }
+}
+
 export async function withRefreshMetrics(callback) {
     const metrics = createRefreshMetrics();
 
     return refreshMetricsStore.run(metrics, async () => {
-        try {
-            const result = await callback(metrics);
-            return { result, metrics: finishRefreshMetrics(metrics) };
-        } catch (error) {
-            finishRefreshMetrics(metrics);
-            error.refreshMetrics = metrics;
-            throw error;
-        }
+        return withDeferredDbSave(async () => {
+            try {
+                const result = await callback(metrics);
+                return { result, metrics: finishRefreshMetrics(metrics) };
+            } catch (error) {
+                finishRefreshMetrics(metrics);
+                error.refreshMetrics = metrics;
+                throw error;
+            }
+        });
     });
 }
 
@@ -263,8 +465,10 @@ export function getSeverity(score) {
 export function insertOrUpdateCve(cve) {
     const database = getDb();
     const existing = getCveById(cve.id);
+    const normalizedCve = normalizeCveInput(cve);
 
     if (existing) {
+        const merged = mergeCveRecords(existing, normalizedCve);
         const stmt = database.prepare(`
             UPDATE cves
             SET source = ?,
@@ -276,22 +480,41 @@ export function insertOrUpdateCve(cve) {
                 updated_at = datetime('now')
             WHERE id = ?
         `);
-        stmt.run(dbValues([cve.source, cve.description, cve.cvss_score, cve.cvss_vector, cve.severity, cve.published_at, cve.id]));
+        stmt.run(dbValues([
+            merged.source,
+            merged.description,
+            merged.cvss_score,
+            merged.cvss_vector,
+            merged.severity,
+            merged.published_at,
+            normalizedCve.id
+        ]));
         stmt.free();
     } else {
         const stmt = database.prepare(`
             INSERT INTO cves (id, source, description, cvss_score, cvss_vector, severity, published_at, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
         `);
-        stmt.run(dbValues([cve.id, cve.source, cve.description, cve.cvss_score, cve.cvss_vector, cve.severity, cve.published_at]));
+        stmt.run(dbValues([
+            normalizedCve.id,
+            normalizedCve.source,
+            normalizedCve.description,
+            normalizedCve.cvss_score,
+            normalizedCve.cvss_vector,
+            normalizedCve.severity,
+            normalizedCve.published_at
+        ]));
         stmt.free();
     }
 
-    if (!existing && shouldQueueCveAlert(cve)) {
-        queueCveAlert(cve);
+    upsertCveSource(normalizedCve.id, normalizedCve.source);
+
+    if (!existing && shouldQueueCveAlert(normalizedCve)) {
+        queueCveAlert(normalizedCve);
     }
 
-    recordRefreshWrite(cve.source, 'cves', !existing);
+    indexCveSearch(getCveById(normalizedCve.id), normalizedCve.search_text, normalizedCve.search_metadata);
+    recordRefreshWrite(normalizedCve.source, 'cves', !existing);
     saveDb();
     return { changes: 1, inserted: !existing, updated: Boolean(existing) };
 }
@@ -305,6 +528,7 @@ export function insertIoc(ioc) {
     `);
     stmt.run(dbValues([ioc.type, ioc.value, ioc.source, ioc.threat_type, ioc.confidence, ioc.first_seen, ioc.last_seen, ioc.metadata, existing?.created_at || null]));
     stmt.free();
+    indexIocSearch(getIocSearchRow(ioc.value, ioc.source), ioc.search_text, ioc.search_metadata);
     recordRefreshWrite(ioc.source, 'iocs', !existing);
     saveDb();
     return { changes: 1, inserted: !existing, updated: Boolean(existing) };
@@ -451,7 +675,7 @@ export function getCveProgressItems(filters = {}) {
     stmt.bind(params);
     const results = [];
     while (stmt.step()) {
-        results.push(stmt.getAsObject());
+        results.push(hydrateCveRow(stmt.getAsObject()));
     }
     stmt.free();
     return results;
@@ -589,7 +813,7 @@ export function getCves(filters = {}) {
     stmt.bind(params);
     const results = [];
     while (stmt.step()) {
-        results.push(stmt.getAsObject());
+        results.push(hydrateCveRow(stmt.getAsObject()));
     }
     stmt.free();
     return results;
@@ -608,6 +832,17 @@ export function getCveById(id) {
     `);
     stmt.bind([id]);
 
+    const result = stmt.step() ? hydrateCveRow(stmt.getAsObject()) : null;
+    stmt.free();
+    return result;
+}
+
+function getIocSearchRow(value, source) {
+    if (!value || !source) return null;
+
+    const database = getDb();
+    const stmt = database.prepare('SELECT * FROM iocs WHERE value = ? AND source = ? LIMIT 1');
+    stmt.bind([value, source]);
     const result = stmt.step() ? stmt.getAsObject() : null;
     stmt.free();
     return result;
@@ -652,6 +887,18 @@ export function getIocs(filters = {}) {
     return results;
 }
 
+export function getIocById(id) {
+    const parsed = Number.parseInt(id, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+
+    const database = getDb();
+    const stmt = database.prepare('SELECT * FROM iocs WHERE id = ? LIMIT 1');
+    stmt.bind([parsed]);
+    const result = stmt.step() ? stmt.getAsObject() : null;
+    stmt.free();
+    return result;
+}
+
 export function getStats() {
     const database = getDb();
 
@@ -680,7 +927,12 @@ export function getStats() {
     const recentCves = recentStmt.getAsObject().count;
     recentStmt.free();
 
-    const sourceStmt = database.prepare(`SELECT source, COUNT(*) as count FROM cves GROUP BY source`);
+    const sourceStmt = database.prepare(`
+        SELECT source, COUNT(DISTINCT cve_id) as count
+        FROM cve_sources
+        GROUP BY source
+        ORDER BY count DESC, source
+    `);
     const sourceStats = [];
     while (sourceStmt.step()) {
         sourceStats.push(sourceStmt.getAsObject());
@@ -738,36 +990,338 @@ export function pruneOldData(days = 90) {
     return { changes: database.getRowsModified() };
 }
 
-export function searchAll(query) {
-    const database = getDb();
+export function searchAll(query, options = {}) {
+    return searchDocuments({ ...options, q: query });
+}
 
-    const cveStmt = database.prepare(`
-        SELECT 'cve' as type, id, description as name, severity, source, published_at as date
-        FROM cves
-        WHERE id LIKE ? OR description LIKE ?
-        LIMIT 20
-    `);
-    cveStmt.bind([`%${query}%`, `%${query}%`]);
-    const cves = [];
+export function searchDocuments(filters = {}) {
+    const database = getDb();
+    const parsed = parseSearchQuery(filters.q || '');
+    const type = normalizeSearchFilter(filters.type || parsed.filters.type);
+    const source = normalizeSearchFilter(filters.source || parsed.filters.source);
+    const limit = normalizeLimit(filters.limit || 50);
+    const offset = normalizeOffset(filters.offset);
+    const terms = [...parsed.terms];
+
+    for (const key of ['severity', 'hash', 'ip', 'domain']) {
+        if (parsed.filters[key]) terms.push(parsed.filters[key]);
+    }
+
+    const conditions = [];
+    const params = [];
+    if (type) {
+        conditions.push('d.entity_type = ?');
+        params.push(type);
+    }
+    if (source) {
+        conditions.push('d.source = ?');
+        params.push(source);
+    }
+
+    const termConditions = [];
+    const scoreParts = [];
+    for (const term of uniqueTerms(terms)) {
+        const normalized = normalizeSearchTerm(term);
+        if (!normalized) continue;
+        termConditions.push('(t.term = ? OR t.term LIKE ? OR d.title LIKE ? OR d.summary LIKE ?)');
+        params.push(normalized, `${normalized}%`, `%${term}%`, `%${term}%`);
+        scoreParts.push(`
+            CASE
+                WHEN t.term = '${escapeSqlLiteral(normalized)}' THEN t.weight * 5
+                WHEN t.term LIKE '${escapeSqlLiteral(normalized)}%' THEN t.weight * 2
+                ELSE 0
+            END
+        `);
+    }
+
+    if (termConditions.length) {
+        conditions.push(`(${termConditions.join(' OR ')})`);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const scoreExpression = scoreParts.length ? scoreParts.join(' + ') : '1';
+    const sql = `
+        SELECT
+            d.doc_id,
+            d.entity_type,
+            d.entity_id,
+            d.source,
+            d.title,
+            d.summary,
+            d.url,
+            d.metadata,
+            d.date,
+            MAX(${scoreExpression}) AS score
+        FROM search_documents d
+        LEFT JOIN search_terms t ON t.doc_id = d.doc_id
+        ${where}
+        GROUP BY d.doc_id
+        ORDER BY score DESC, datetime(d.date) DESC, d.title ASC
+        LIMIT ? OFFSET ?
+    `;
+    params.push(limit, offset);
+
+    const stmt = database.prepare(sql);
+    stmt.bind(params);
+    const results = [];
+    while (stmt.step()) {
+        results.push(formatSearchResult(stmt.getAsObject()));
+    }
+    stmt.free();
+    return results;
+}
+
+export function enrichCveSearch(cveId, metadata = {}, extraText = '') {
+    const cve = getCveById(String(cveId || '').toUpperCase());
+    if (!cve) return false;
+
+    const existing = getSearchDocument(`cve:${cve.id}`);
+    const existingMetadata = parseJson(existing?.metadata) || {};
+    indexCveSearch(cve, extraText, { ...existingMetadata, ...metadata });
+    saveDb();
+    return true;
+}
+
+function backfillSearchIndexIfEmpty() {
+    const stmt = db.prepare('SELECT COUNT(*) AS count FROM search_documents');
+    stmt.step();
+    const count = stmt.getAsObject().count || 0;
+    stmt.free();
+    if (count > 0) return;
+
+    const cveStmt = db.prepare(`SELECT ${CVE_PROGRESS_SELECT} FROM cves ${CVE_PROGRESS_JOINS}`);
     while (cveStmt.step()) {
-        cves.push(cveStmt.getAsObject());
+        indexCveSearch(hydrateCveRow(cveStmt.getAsObject()));
     }
     cveStmt.free();
 
-    const iocStmt = database.prepare(`
-        SELECT 'ioc' as type, id, value as name, type as ioc_type, source, threat_type, last_seen as date
-        FROM iocs
-        WHERE value LIKE ?
-        LIMIT 20
-    `);
-    iocStmt.bind([`%${query}%`]);
-    const iocs = [];
+    const iocStmt = db.prepare('SELECT * FROM iocs');
     while (iocStmt.step()) {
-        iocs.push(iocStmt.getAsObject());
+        indexIocSearch(iocStmt.getAsObject());
     }
     iocStmt.free();
+}
 
-    return [...cves, ...iocs];
+function indexCveSearch(cve, extraText = '', extraMetadata = {}) {
+    if (!cve?.id) return;
+
+    const metadata = {
+        severity: cve.severity,
+        cvss_score: cve.cvss_score,
+        sources: cve.sources || [cve.source],
+        is_kev: Boolean(cve.is_kev),
+        ...extraMetadata
+    };
+    const text = [
+        cve.id,
+        cve.source,
+        cve.severity,
+        cve.description,
+        cve.cvss_vector,
+        ...(cve.sources || []),
+        extraText,
+        JSON.stringify(extraMetadata || {})
+    ].join(' ');
+
+    upsertSearchDocument({
+        doc_id: `cve:${cve.id}`,
+        entity_type: 'cve',
+        entity_id: cve.id,
+        source: cve.source,
+        title: cve.id,
+        summary: cve.description || '',
+        url: sourceUrlForCve(cve.id),
+        metadata,
+        date: cve.published_at || cve.updated_at || cve.created_at
+    }, buildWeightedTerms({
+        id: cve.id,
+        source: cve.source,
+        type: 'cve',
+        high: [cve.id, ...(cve.sources || [])],
+        medium: [cve.severity, cve.cvss_vector, extraText],
+        low: [cve.description, text]
+    }));
+}
+
+function indexIocSearch(ioc, extraText = '', extraMetadata = {}) {
+    if (!ioc?.id || !ioc.value) return;
+
+    const parsedMetadata = parseJson(ioc.metadata) || {};
+    const metadata = {
+        ioc_type: ioc.type,
+        threat_type: ioc.threat_type,
+        confidence: ioc.confidence,
+        ...parsedMetadata,
+        ...extraMetadata
+    };
+    const text = [
+        ioc.value,
+        ioc.type,
+        ioc.source,
+        ioc.threat_type,
+        ioc.metadata,
+        extraText
+    ].join(' ');
+
+    upsertSearchDocument({
+        doc_id: `ioc:${ioc.source}:${ioc.value}`,
+        entity_type: 'ioc',
+        entity_id: String(ioc.id),
+        source: ioc.source,
+        title: ioc.value,
+        summary: ioc.threat_type || ioc.type || '',
+        url: null,
+        metadata,
+        date: ioc.last_seen || ioc.first_seen || ioc.created_at
+    }, buildWeightedTerms({
+        id: ioc.value,
+        source: ioc.source,
+        type: 'ioc',
+        high: [ioc.value, ioc.source, ioc.type],
+        medium: [ioc.threat_type, parsedMetadata.tags, parsedMetadata.signature, parsedMetadata.file_name, parsedMetadata.md5, parsedMetadata.sha1],
+        low: [ioc.metadata, extraText, text]
+    }));
+}
+
+function upsertSearchDocument(document, weightedTerms) {
+    const database = getDb();
+    database.run(`
+        INSERT OR REPLACE INTO search_documents (
+            doc_id, entity_type, entity_id, source, title, summary, url, metadata, date, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `, [
+        document.doc_id,
+        document.entity_type,
+        document.entity_id,
+        document.source || null,
+        document.title || '',
+        document.summary || '',
+        document.url || null,
+        JSON.stringify(document.metadata || {}),
+        document.date || null
+    ]);
+    database.run('DELETE FROM search_terms WHERE doc_id = ?', [document.doc_id]);
+
+    for (const [term, weight] of weightedTerms.entries()) {
+        database.run('INSERT INTO search_terms (doc_id, term, weight) VALUES (?, ?, ?)', [document.doc_id, term, weight]);
+    }
+}
+
+function getSearchDocument(docId) {
+    const stmt = getDb().prepare('SELECT * FROM search_documents WHERE doc_id = ? LIMIT 1');
+    stmt.bind([docId]);
+    const row = stmt.step() ? stmt.getAsObject() : null;
+    stmt.free();
+    return row;
+}
+
+function buildWeightedTerms(groups) {
+    const weighted = new Map();
+    addTerms(weighted, groups.type, 10);
+    addTerms(weighted, groups.source, 20);
+    addTerms(weighted, groups.id, 100);
+    addTerms(weighted, groups.high, 60);
+    addTerms(weighted, groups.medium, 30);
+    addTerms(weighted, groups.low, 10);
+    return weighted;
+}
+
+function addTerms(weighted, value, weight) {
+    for (const term of tokenizeSearchText(value)) {
+        weighted.set(term, Math.max(weighted.get(term) || 0, weight));
+    }
+}
+
+function tokenizeSearchText(value) {
+    if (value === undefined || value === null) return [];
+    const raw = Array.isArray(value) ? value.join(' ') : String(value);
+    const normalized = raw.toLowerCase();
+    const tokens = new Set();
+
+    for (const exact of normalized.match(/[a-z0-9][a-z0-9._:/-]{1,}/g) || []) {
+        tokens.add(exact);
+    }
+    for (const part of normalized.split(/[^a-z0-9]+/)) {
+        if (part.length >= 2) tokens.add(part);
+    }
+    return [...tokens].slice(0, 800);
+}
+
+function parseSearchQuery(query) {
+    const filters = {};
+    const terms = [];
+    for (const part of String(query || '').match(/"[^"]+"|\S+/g) || []) {
+        const cleaned = part.replace(/^"|"$/g, '');
+        const separator = cleaned.indexOf(':');
+        if (separator > 0) {
+            const key = cleaned.slice(0, separator).toLowerCase();
+            const value = cleaned.slice(separator + 1).trim();
+            if (['type', 'source', 'severity', 'hash', 'ip', 'domain'].includes(key) && value) {
+                filters[key] = value.toLowerCase();
+                continue;
+            }
+        }
+        terms.push(cleaned);
+    }
+    return { filters, terms };
+}
+
+function normalizeSearchTerm(term) {
+    return tokenizeSearchText(term)[0] || null;
+}
+
+function normalizeSearchFilter(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized || null;
+}
+
+function uniqueTerms(terms) {
+    return [...new Set(terms.map(term => String(term || '').trim()).filter(Boolean))];
+}
+
+function escapeSqlLiteral(value) {
+    return String(value || '').replace(/'/g, "''");
+}
+
+function formatSearchResult(row) {
+    const metadata = parseJson(row.metadata) || {};
+    return {
+        type: row.entity_type,
+        entity_id: row.entity_id,
+        id: row.entity_id,
+        title: row.title,
+        name: row.title,
+        summary: row.summary,
+        source: row.source,
+        date: row.date,
+        url: row.url,
+        score: Number(row.score || 0),
+        metadata,
+        severity: metadata.severity || null,
+        ioc_type: metadata.ioc_type || null,
+        threat_type: metadata.threat_type || null
+    };
+}
+
+function sourceUrlForCve(cveId) {
+    if (/^CVE-\d{4}-\d+$/i.test(cveId || '')) {
+        return `https://nvd.nist.gov/vuln/detail/${encodeURIComponent(cveId)}`;
+    }
+    if (/^GHSA-/i.test(cveId || '')) {
+        return `https://github.com/advisories/${encodeURIComponent(cveId)}`;
+    }
+    return null;
+}
+
+function parseJson(value) {
+    if (!value) return null;
+    if (typeof value === 'object') return value;
+    try {
+        return JSON.parse(value);
+    } catch {
+        return null;
+    }
 }
 
 export function getDb() {
@@ -840,6 +1394,91 @@ function dbValues(values) {
     return values.map(value => value === undefined ? null : value);
 }
 
+function normalizeCveInput(cve) {
+    return {
+        ...cve,
+        id: String(cve.id || '').toUpperCase(),
+        source: String(cve.source || 'nvd').toLowerCase(),
+        description: cve.description || null,
+        cvss_score: Number.isFinite(Number(cve.cvss_score)) ? Number(cve.cvss_score) : 0,
+        cvss_vector: cve.cvss_vector || null,
+        severity: cve.severity || getSeverity(Number(cve.cvss_score) || 0),
+        published_at: cve.published_at || new Date().toISOString()
+    };
+}
+
+function mergeCveRecords(existing, incoming) {
+    const incomingPriority = sourcePriority(incoming.source);
+    const existingPriority = sourcePriority(existing.source);
+    const shouldReplaceCanonical = incomingPriority >= existingPriority;
+
+    return {
+        source: shouldReplaceCanonical ? incoming.source : existing.source,
+        description: chooseField(existing.description, incoming.description, shouldReplaceCanonical),
+        cvss_score: chooseScore(existing.cvss_score, incoming.cvss_score, shouldReplaceCanonical),
+        cvss_vector: chooseField(existing.cvss_vector, incoming.cvss_vector, shouldReplaceCanonical),
+        severity: chooseField(existing.severity, incoming.severity, shouldReplaceCanonical),
+        published_at: chooseField(existing.published_at, incoming.published_at, shouldReplaceCanonical)
+    };
+}
+
+function chooseField(existingValue, incomingValue, shouldReplace) {
+    if (shouldReplace && incomingValue !== undefined && incomingValue !== null && incomingValue !== '') {
+        return incomingValue;
+    }
+    if (existingValue !== undefined && existingValue !== null && existingValue !== '') {
+        return existingValue;
+    }
+    return incomingValue ?? null;
+}
+
+function chooseScore(existingValue, incomingValue, shouldReplace) {
+    const incomingScore = Number(incomingValue);
+    const existingScore = Number(existingValue);
+    if (shouldReplace && Number.isFinite(incomingScore)) return incomingScore;
+    if (Number.isFinite(existingScore) && existingScore > 0) return existingScore;
+    return Number.isFinite(incomingScore) ? incomingScore : 0;
+}
+
+function upsertCveSource(cveId, source) {
+    const normalizedSource = String(source || '').toLowerCase();
+    if (!cveId || !normalizedSource) return;
+
+    db.run(`
+        INSERT INTO cve_sources (cve_id, source, first_seen, last_seen)
+        VALUES (?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT(cve_id, source) DO UPDATE SET last_seen = datetime('now')
+    `, [cveId, normalizedSource]);
+}
+
+function hydrateCveRow(row) {
+    if (!row) return row;
+
+    const sources = uniqueSources(row.sources_csv || row.source);
+    row.sources = sources;
+    row.is_kev = Boolean(Number(row.is_kev) || sources.includes('cisa_kev'));
+    delete row.sources_csv;
+    return row;
+}
+
+function uniqueSources(value) {
+    const seen = new Set();
+    return String(value || '')
+        .split(',')
+        .map(source => source.trim().toLowerCase())
+        .filter(Boolean)
+        .filter(source => {
+            if (seen.has(source)) return false;
+            seen.add(source);
+            return true;
+        })
+        .sort((a, b) => sourcePriority(b) - sourcePriority(a) || a.localeCompare(b));
+}
+
+function sourcePriority(source) {
+    return CVE_SOURCE_PRIORITIES[String(source || '').toLowerCase()] || 0;
+}
+
 function shouldQueueCveAlert(cve) {
     if (!cve?.id || !['critical', 'high'].includes(String(cve.severity || '').toLowerCase())) {
         return false;
@@ -865,6 +1504,7 @@ function queueCveAlert(cve) {
 export default {
     initializeDb,
     getDb,
+    getDbPath,
     getSeverity,
     withRefreshMetrics,
     startRefreshMetrics,
@@ -874,6 +1514,7 @@ export default {
     insertOrUpdateCve,
     getCveById,
     insertIoc,
+    getIocById,
     linkCveIoc,
     updateFeedStatus,
     getPendingCveAlerts,
@@ -888,5 +1529,7 @@ export default {
     getStats,
     getTriageStats,
     pruneOldData,
-    searchAll
+    searchAll,
+    searchDocuments,
+    enrichCveSearch
 };

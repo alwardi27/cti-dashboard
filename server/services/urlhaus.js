@@ -1,5 +1,5 @@
-import axios from 'axios';
 import { insertIoc, updateFeedStatus } from '../db/database.js';
+import { feedGet } from '../utils/feedHttp.js';
 
 const URLHAUS_API = 'https://urlhaus-api.abuse.ch/v1/';
 
@@ -12,10 +12,10 @@ export async function fetchUrlhausUrls(limit = 500, authKey = process.env.URLHAU
 
     try {
         const boundedLimit = normalizeUrlhausLimit(limit);
-        const response = await axios.get(`${URLHAUS_API}urls/recent/limit/${boundedLimit}/`, {
+        const response = await feedGet(`${URLHAUS_API}urls/recent/limit/${boundedLimit}/`, {
             headers: { 'Auth-Key': authKey },
-            timeout: 30000
-        });
+            timeout: Number.parseInt(process.env.URLHAUS_TIMEOUT_MS || '90000', 10)
+        }, { retries: Number.parseInt(process.env.URLHAUS_RETRIES || '3', 10) });
 
         const queryStatus = response.data?.query_status;
         if (queryStatus && !['ok', 'no_results'].includes(queryStatus)) {
@@ -89,7 +89,7 @@ export async function fetchUrlhausHosts(authKey = process.env.URLHAUS_AUTH_KEY |
 
 function normalizeUrlhausLimit(limit) {
     const parsed = Number.parseInt(limit, 10);
-    if (!Number.isFinite(parsed) || parsed <= 0) return 500;
+    if (!Number.isFinite(parsed) || parsed <= 0) return 200;
     return Math.min(parsed, 1000);
 }
 

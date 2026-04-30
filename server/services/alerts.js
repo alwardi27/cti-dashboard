@@ -98,8 +98,8 @@ function isWhatsAppAddress(value) {
     return /^whatsapp:\+\d{8,15}$/.test(String(value || ''));
 }
 
-function meetsSeverityThreshold(severity, threshold = 'high') {
+export function meetsSeverityThreshold(severity, threshold = 'high') {
     return (SEVERITY_RANK[severity] || 0) >= (SEVERITY_RANK[threshold] || SEVERITY_RANK.high);
 }
 
-export default { processCveAlerts };
+export default { processCveAlerts, meetsSeverityThreshold };

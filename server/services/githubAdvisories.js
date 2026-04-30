@@ -1,5 +1,5 @@
-import axios from 'axios';
 import { insertOrUpdateCve, updateFeedStatus, getSeverity } from '../db/database.js';
+import { feedGet, feedPost } from '../utils/feedHttp.js';
 
 const GITHUB_GRAPHQL = 'https://api.github.com/graphql';
 
@@ -44,13 +44,14 @@ export async function fetchGithubAdvisories(token) {
         const maxPages = 5;
 
         for (let page = 0; page < maxPages; page++) {
-            const response = await axios.post(
+            const response = await feedPost(
                 GITHUB_GRAPHQL,
                 { query: GHSA_QUERY, variables: { cursor } },
                 {
                     headers: { Authorization: `Bearer ${token}` },
-                    timeout: 30000
-                }
+                    timeout: Number.parseInt(process.env.GITHUB_TIMEOUT_MS || '90000', 10)
+                },
+                { retries: Number.parseInt(process.env.GITHUB_RETRIES || '3', 10) }
             );
 
             const data = response.data?.data?.securityAdvisories;
@@ -94,12 +95,13 @@ export async function fetchGithubAdvisories(token) {
 
 async function fetchGithubAdvisoriesPublic() {
     try {
-        const response = await axios.get(
+        const response = await feedGet(
             'https://api.github.com/advisories?type=reviewed',
             {
                 headers: { Accept: 'application/vnd.github+json' },
-                timeout: 30000
-            }
+                timeout: Number.parseInt(process.env.GITHUB_TIMEOUT_MS || '90000', 10)
+            },
+            { retries: Number.parseInt(process.env.GITHUB_RETRIES || '3', 10) }
         );
 
         const advisories = response.data || [];

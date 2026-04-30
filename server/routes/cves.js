@@ -8,26 +8,14 @@ import {
     setCveProgressStatus
 } from '../db/database.js';
 import { fetchNvdById } from '../services/nvd.js';
+import { sendError } from '../utils/http.js';
+import { parseCveFilters, parseProgressFilters } from '../utils/validation.js';
 
 const router = Router();
 
 router.get('/', async (req, res) => {
     try {
-        const { source, severity, search, fromDate, progressStatus, needsReview, sort, limit, offset } = req.query;
-
-        const filters = {
-            source: source || null,
-            severity: severity || null,
-            search: search || null,
-            fromDate: fromDate || null,
-            progressStatus: progressStatus || null,
-            needsReview: needsReview === 'true' || needsReview === '1',
-            sort: sort || null,
-            limit,
-            offset
-        };
-
-        const cves = getCves(filters);
+        const cves = getCves(parseCveFilters(req.query));
         res.json({
             success: true,
             count: cves.length,
@@ -35,19 +23,13 @@ router.get('/', async (req, res) => {
         });
     } catch (error) {
         console.error('[API /cves] Error:', error.message);
-        res.status(500).json({ success: false, error: error.message });
+        sendError(res, error);
     }
 });
 
 router.get('/progress', async (req, res) => {
     try {
-        const { status, search, limit, offset } = req.query;
-        const progressItems = getCveProgressItems({
-            status: status || null,
-            search: search || null,
-            limit,
-            offset
-        });
+        const progressItems = getCveProgressItems(parseProgressFilters(req.query));
 
         res.json({
             success: true,
@@ -56,7 +38,7 @@ router.get('/progress', async (req, res) => {
         });
     } catch (error) {
         console.error('[API /cves/progress] Error:', error.message);
-        res.status(error.statusCode || 500).json({ success: false, error: error.message });
+        sendError(res, error);
     }
 });
 
@@ -75,7 +57,7 @@ router.get('/:id/progress', async (req, res) => {
         });
     } catch (error) {
         console.error('[API /cves/:id/progress] Error:', error.message);
-        res.status(error.statusCode || 500).json({ success: false, error: error.message });
+        sendError(res, error);
     }
 });
 
@@ -90,7 +72,7 @@ router.patch('/:id/progress', async (req, res) => {
         });
     } catch (error) {
         console.error('[API /cves/:id/progress PATCH] Error:', error.message);
-        res.status(error.statusCode || 500).json({ success: false, error: error.message });
+        sendError(res, error);
     }
 });
 
@@ -105,7 +87,7 @@ router.post('/:id/progress/notes', async (req, res) => {
         });
     } catch (error) {
         console.error('[API /cves/:id/progress/notes] Error:', error.message);
-        res.status(error.statusCode || 500).json({ success: false, error: error.message });
+        sendError(res, error);
     }
 });
 
@@ -135,7 +117,7 @@ router.get('/:id', async (req, res) => {
         res.status(404).json({ success: false, error: 'CVE not found' });
     } catch (error) {
         console.error('[API /cves/:id] Error:', error.message);
-        res.status(500).json({ success: false, error: error.message });
+        sendError(res, error);
     }
 });
 

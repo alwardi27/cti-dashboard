@@ -1,5 +1,5 @@
-import axios from 'axios';
 import { insertOrUpdateCve, updateFeedStatus, getSeverity } from '../db/database.js';
+import { feedGet } from '../utils/feedHttp.js';
 
 const NVD_API_BASE = 'https://services.nvd.nist.gov/rest/json/cves/2.0';
 
@@ -15,11 +15,11 @@ export async function fetchNvdCves(daysBack = 7, apiKey = process.env.NVD_API_KE
     };
 
     try {
-        const response = await axios.get(NVD_API_BASE, {
+        const response = await feedGet(NVD_API_BASE, {
             params,
             headers: apiKey ? { apiKey } : {},
-            timeout: 30000
-        });
+            timeout: Number.parseInt(process.env.NVD_TIMEOUT_MS || '90000', 10)
+        }, { retries: Number.parseInt(process.env.NVD_RETRIES || '3', 10) });
         const vulnerabilities = response.data?.vulnerabilities || [];
         let count = 0;
 
@@ -67,11 +67,11 @@ export async function fetchNvdCves(daysBack = 7, apiKey = process.env.NVD_API_KE
 
 export async function fetchNvdById(cveId, apiKey = process.env.NVD_API_KEY || null) {
     try {
-        const response = await axios.get(NVD_API_BASE, {
+        const response = await feedGet(NVD_API_BASE, {
             params: { cveId },
             headers: apiKey ? { apiKey } : {},
-            timeout: 15000
-        });
+            timeout: Number.parseInt(process.env.NVD_TIMEOUT_MS || '90000', 10)
+        }, { retries: Number.parseInt(process.env.NVD_RETRIES || '3', 10) });
         const v = response.data?.vulnerabilities?.[0];
         if (!v) return null;
 
@@ -95,6 +95,8 @@ export async function fetchNvdById(cveId, apiKey = process.env.NVD_API_KEY || nu
         return {
             id: cve.id,
             source: 'nvd',
+            sources: ['nvd'],
+            is_kev: false,
             description: description.substring(0, 5000),
             cvss_score: cvssScore,
             cvss_vector: cvssVector,

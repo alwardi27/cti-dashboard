@@ -1,5 +1,5 @@
-import axios from 'axios';
 import { insertIoc, updateFeedStatus } from '../db/database.js';
+import { feedPost } from '../utils/feedHttp.js';
 
 const THREATFOX_API = 'https://threatfox-api.abuse.ch/api/v1/';
 
@@ -11,7 +11,7 @@ export async function fetchThreatfoxIocs(days = 1, authKey = process.env.THREATF
     }
 
     try {
-        const response = await axios.post(
+        const response = await feedPost(
             THREATFOX_API,
             {
                 query: 'get_iocs',
@@ -19,8 +19,9 @@ export async function fetchThreatfoxIocs(days = 1, authKey = process.env.THREATF
             },
             {
                 headers: { 'Auth-Key': authKey },
-                timeout: 30000
-            }
+                timeout: Number.parseInt(process.env.THREATFOX_TIMEOUT_MS || '90000', 10)
+            },
+            { retries: Number.parseInt(process.env.THREATFOX_RETRIES || '3', 10) }
         );
 
         const iocs = response.data?.data || [];

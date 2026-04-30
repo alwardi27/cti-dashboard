@@ -1,23 +1,13 @@
 import { Router } from 'express';
-import { getIocs } from '../db/database.js';
+import { getIocById, getIocs } from '../db/database.js';
+import { sendError } from '../utils/http.js';
+import { parseIocFilters } from '../utils/validation.js';
 
 const router = Router();
 
 router.get('/', async (req, res) => {
     try {
-        const { type, source, threatType, search, fromDate, limit, offset } = req.query;
-
-        const filters = {
-            type: type || null,
-            source: source || null,
-            threatType: threatType || null,
-            search: search || null,
-            fromDate: fromDate || null,
-            limit,
-            offset
-        };
-
-        const iocs = getIocs(filters);
+        const iocs = getIocs(parseIocFilters(req.query));
         res.json({
             success: true,
             count: iocs.length,
@@ -25,7 +15,23 @@ router.get('/', async (req, res) => {
         });
     } catch (error) {
         console.error('[API /iocs] Error:', error.message);
-        res.status(500).json({ success: false, error: error.message });
+        sendError(res, error);
+    }
+});
+
+router.get('/:id', async (req, res) => {
+    try {
+        const ioc = getIocById(req.params.id);
+        if (!ioc) {
+            return res.status(404).json({ success: false, error: 'IOC not found' });
+        }
+        res.json({
+            success: true,
+            data: ioc
+        });
+    } catch (error) {
+        console.error('[API /iocs/:id] Error:', error.message);
+        sendError(res, error);
     }
 });
 

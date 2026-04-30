@@ -1,11 +1,13 @@
-import axios from 'axios';
 import { insertOrUpdateCve, updateFeedStatus, getSeverity } from '../db/database.js';
+import { feedGet } from '../utils/feedHttp.js';
 
 const CISA_KEV_URL = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json';
 
 export async function fetchCisaKev() {
     try {
-        const response = await axios.get(CISA_KEV_URL, { timeout: 30000 });
+        const response = await feedGet(CISA_KEV_URL, {
+            timeout: Number.parseInt(process.env.CISA_KEV_TIMEOUT_MS || '90000', 10)
+        }, { retries: Number.parseInt(process.env.CISA_KEV_RETRIES || '3', 10) });
         const vulnerabilities = response.data?.vulnerabilities || [];
         let count = 0;
 

@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS cves (
     id TEXT PRIMARY KEY,
-    source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx')),
+    source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv')),
     description TEXT,
     cvss_score REAL,
     cvss_vector TEXT,
@@ -31,6 +31,15 @@ CREATE TABLE IF NOT EXISTS cve_ioc_links (
     PRIMARY KEY (cve_id, ioc_id),
     FOREIGN KEY (cve_id) REFERENCES cves(id) ON DELETE CASCADE,
     FOREIGN KEY (ioc_id) REFERENCES iocs(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS cve_sources (
+    cve_id TEXT NOT NULL,
+    source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv')),
+    first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (cve_id, source),
+    FOREIGN KEY (cve_id) REFERENCES cves(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS feed_status (
@@ -78,9 +87,36 @@ CREATE TABLE IF NOT EXISTS app_state (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS search_documents (
+    doc_id TEXT PRIMARY KEY,
+    entity_type TEXT NOT NULL CHECK(entity_type IN ('cve', 'ioc')),
+    entity_id TEXT NOT NULL,
+    source TEXT,
+    title TEXT,
+    summary TEXT,
+    url TEXT,
+    metadata TEXT,
+    date DATETIME,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS search_terms (
+    doc_id TEXT NOT NULL,
+    term TEXT NOT NULL,
+    weight INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (doc_id, term),
+    FOREIGN KEY (doc_id) REFERENCES search_documents(doc_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_cves_source ON cves(source);
 CREATE INDEX IF NOT EXISTS idx_cves_severity ON cves(severity);
 CREATE INDEX IF NOT EXISTS idx_cves_published ON cves(published_at);
+CREATE INDEX IF NOT EXISTS idx_cve_sources_source ON cve_sources(source);
 CREATE INDEX IF NOT EXISTS idx_iocs_type ON iocs(type);
 CREATE INDEX IF NOT EXISTS idx_iocs_source ON iocs(source);
 CREATE INDEX IF NOT EXISTS idx_iocs_threat_type ON iocs(threat_type);
@@ -90,3 +126,7 @@ CREATE INDEX IF NOT EXISTS idx_cve_progress_tags_status ON cve_progress_tags(sta
 CREATE INDEX IF NOT EXISTS idx_cve_progress_tags_updated ON cve_progress_tags(updated_at);
 CREATE INDEX IF NOT EXISTS idx_cve_progress_notes_cve ON cve_progress_notes(cve_id);
 CREATE INDEX IF NOT EXISTS idx_cve_progress_notes_created ON cve_progress_notes(created_at);
+CREATE INDEX IF NOT EXISTS idx_search_documents_type ON search_documents(entity_type);
+CREATE INDEX IF NOT EXISTS idx_search_documents_source ON search_documents(source);
+CREATE INDEX IF NOT EXISTS idx_search_documents_date ON search_documents(date);
+CREATE INDEX IF NOT EXISTS idx_search_terms_term ON search_terms(term);
