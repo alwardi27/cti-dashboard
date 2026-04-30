@@ -358,6 +358,7 @@ let allCves = [];
 
         function selectIoc(ioc) {
             selectedItem = ioc;
+            renderIocList();
             renderIocDetail(ioc);
         }
 
@@ -882,7 +883,7 @@ let allCves = [];
                 <div class="search-result" onclick="openSearchResult(${index})">
                     <div class="search-result-header">
                         <span class="search-result-title">${escapeHtml(result.title || result.name || result.id || '')}</span>
-                        <span class="search-result-type">${escapeHtml(result.type || 'result')} · ${escapeHtml(result.source || 'unknown')}</span>
+                        <span class="search-result-type">${escapeHtml(result.type || 'result')} - ${escapeHtml(result.source || 'unknown')}</span>
                     </div>
                     <div class="search-result-summary">${escapeHtml(result.summary || result.threat_type || result.severity || '')}</div>
                 </div>
