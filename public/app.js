@@ -19,6 +19,7 @@ let allCves = [];
         let autoRefreshTimer = null;
         let isRefreshing = false;
         let globalSearchResults = [];
+        let progressImportCsvItems = [];
 
         const API_BASE = '/api';
         const REQUEST_TIMEOUT_MS = 45000;
@@ -553,6 +554,90 @@ let allCves = [];
                 setRefreshStatus(`Note added to ${cveId}.`, 'success');
             } catch (e) {
                 setRefreshStatus(`Note failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function handleImportCsvFile(event) {
+            const file = event.target.files?.[0];
+            progressImportCsvItems = [];
+            if (!file) {
+                updateImportPreview();
+                return;
+            }
+
+            try {
+                const text = await file.text();
+                progressImportCsvItems = CtiDashboardUtils.parseProgressImportCsv(text);
+                updateImportPreview(`${progressImportCsvItems.length} CSV row(s) loaded.`, progressImportCsvItems.length ? 'success' : '');
+            } catch (e) {
+                progressImportCsvItems = [];
+                updateImportPreview(`CSV failed: ${e.message}`, 'error');
+            }
+        }
+
+        function getProgressImportItems() {
+            const pasted = CtiDashboardUtils.parseProgressImportText(document.getElementById('progressImportText')?.value || '');
+            return [...pasted, ...progressImportCsvItems];
+        }
+
+        function updateImportPreview(message = null, type = '') {
+            const preview = document.getElementById('progressImportPreview');
+            if (!preview) return;
+
+            const items = getProgressImportItems();
+            const sample = items.slice(0, 5).map(item => item.id).join(', ');
+            preview.className = `import-preview ${type || ''}`.trim();
+            if (message) {
+                preview.textContent = message;
+            } else if (!items.length) {
+                preview.textContent = 'No CVEs selected.';
+            } else {
+                preview.textContent = `${items.length} CVE row(s) ready${sample ? `: ${sample}${items.length > 5 ? ', ...' : ''}` : '.'}`;
+            }
+        }
+
+        async function importProgressCves() {
+            const items = getProgressImportItems();
+            if (!items.length) {
+                updateImportPreview('No valid CVE IDs found.', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('progressImportBtn');
+            btn.disabled = true;
+            btn.textContent = 'Importing...';
+            updateImportPreview(`Importing ${items.length} CVE row(s)...`);
+
+            try {
+                const response = await fetchJson(`${API_BASE}/cves/progress/import`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ items })
+                }, REFRESH_TIMEOUT_MS);
+                const summary = response.data?.summary || {};
+                const teams = response.notifications?.teams;
+                const teamsWarning = teams?.attempted && !teams.sent ? ` Teams: ${teams.error || 'not sent'}.` : '';
+
+                document.getElementById('progressImportText').value = '';
+                document.getElementById('progressImportCsv').value = '';
+                progressImportCsvItems = [];
+                updateImportPreview(
+                    `Imported ${summary.imported || 0}, updated ${summary.updated || 0}, placeholders ${summary.placeholders || 0}, failed ${summary.failed || 0}.${teamsWarning}`,
+                    summary.failed ? 'error' : 'success'
+                );
+                setRefreshStatus(`Progress import completed: ${summary.imported || 0} imported, ${summary.updated || 0} updated.`, summary.failed ? '' : 'success');
+
+                await fetchStats();
+                await fetchCves(document.getElementById('cveSearch')?.value || '');
+                await fetchProgress(document.getElementById('progressSearch')?.value || '');
+                const globalQuery = document.getElementById('globalSearch')?.value || '';
+                if (globalQuery.trim()) await fetchGlobalSearch(globalQuery);
+            } catch (e) {
+                updateImportPreview(`Import failed: ${e.message}`, 'error');
+                setRefreshStatus(`Progress import failed: ${e.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Import CVEs';
             }
         }
 

@@ -7,7 +7,10 @@ import {
     getCves,
     setCveProgressStatus
 } from '../db/database.js';
+import { getTeamsConfig } from '../config/env.js';
+import { importCveProgressItems } from '../services/cveImport.js';
 import { fetchNvdById } from '../services/nvd.js';
+import { notifyTeamsProgress } from '../services/teams.js';
 import { sendError } from '../utils/http.js';
 import { parseCveFilters, parseProgressFilters } from '../utils/validation.js';
 
@@ -42,6 +45,22 @@ router.get('/progress', async (req, res) => {
     }
 });
 
+router.post('/progress/import', async (req, res) => {
+    try {
+        const result = await importCveProgressItems(req.body?.items);
+        const teams = await notifyTeamsProgress('import_summary', result, getTeamsConfig());
+
+        res.json({
+            success: true,
+            data: result,
+            notifications: { teams }
+        });
+    } catch (error) {
+        console.error('[API /cves/progress/import] Error:', error.message);
+        sendError(res, error);
+    }
+});
+
 router.get('/:id/progress', async (req, res) => {
     try {
         const { id } = req.params;
@@ -65,10 +84,15 @@ router.patch('/:id/progress', async (req, res) => {
     try {
         const { id } = req.params;
         const progress = setCveProgressStatus(id.toUpperCase(), req.body?.status || null);
+        const teams = await notifyTeamsProgress('status_changed', {
+            cve: progress,
+            status: progress.progress_status
+        }, getTeamsConfig());
 
         res.json({
             success: true,
-            data: progress
+            data: progress,
+            notifications: { teams }
         });
     } catch (error) {
         console.error('[API /cves/:id/progress PATCH] Error:', error.message);
@@ -79,11 +103,17 @@ router.patch('/:id/progress', async (req, res) => {
 router.post('/:id/progress/notes', async (req, res) => {
     try {
         const { id } = req.params;
+        const note = req.body?.note;
         const progress = addCveProgressNote(id.toUpperCase(), req.body?.note);
+        const teams = await notifyTeamsProgress('note_added', {
+            cve: progress,
+            note
+        }, getTeamsConfig());
 
         res.status(201).json({
             success: true,
-            data: progress
+            data: progress,
+            notifications: { teams }
         });
     } catch (error) {
         console.error('[API /cves/:id/progress/notes] Error:', error.message);

@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS cves (
     id TEXT PRIMARY KEY,
-    source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv')),
+    source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv', 'manual')),
     description TEXT,
     cvss_score REAL,
     cvss_vector TEXT,
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS cve_ioc_links (
 
 CREATE TABLE IF NOT EXISTS cve_sources (
     cve_id TEXT NOT NULL,
-    source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv')),
+    source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv', 'manual')),
     first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
     last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (cve_id, source),

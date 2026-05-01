@@ -1,6 +1,6 @@
 import { httpError } from './http.js';
 
-const CVE_SOURCES = ['nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv'];
+const CVE_SOURCES = ['nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv', 'manual'];
 const IOC_TYPES = ['ip', 'domain', 'url', 'hash'];
 const IOC_SOURCES = ['urlhaus', 'threatfox', 'malwarebazaar', 'virustotal', 'greynoise', 'shodan', 'censys', 'abuseipdb', 'otx', 'feodo', 'sslbl'];
 const SEARCH_TYPES = ['cve', 'ioc'];
@@ -22,6 +22,7 @@ const REFRESH_OVERRIDE_KEYS = new Set([
     'abuseipdbApiKey',
     'otxApiKey',
     'whatsapp',
+    'teams',
     'enabled',
     'provider',
     'minSeverity',
@@ -42,6 +43,10 @@ const WHATSAPP_OVERRIDE_KEYS = new Set([
     'twilioAuthToken',
     'twilioFrom',
     'to'
+]);
+const TEAMS_OVERRIDE_KEYS = new Set([
+    'enabled',
+    'webhookUrl'
 ]);
 
 export function parseCveFilters(query = {}) {
@@ -103,6 +108,17 @@ export function validateRefreshOverrides(body = {}) {
         for (const key of Object.keys(body.whatsapp)) {
             if (!WHATSAPP_OVERRIDE_KEYS.has(key)) {
                 throw httpError(`Unsupported WhatsApp override: ${key}`);
+            }
+        }
+    }
+
+    if (body.teams !== undefined) {
+        if (!body.teams || typeof body.teams !== 'object' || Array.isArray(body.teams)) {
+            throw httpError('teams override must be a JSON object');
+        }
+        for (const key of Object.keys(body.teams)) {
+            if (!TEAMS_OVERRIDE_KEYS.has(key)) {
+                throw httpError(`Unsupported Teams override: ${key}`);
             }
         }
     }
