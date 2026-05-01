@@ -242,7 +242,12 @@ test('progress Teams notifications are best-effort for imports, status changes, 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items: [{ id: 'CVE-2026-2004' }] })
     });
-    assert.deepEqual(imported.notifications.teams, { attempted: true, sent: true });
+    assert.deepEqual(imported.notifications.teams, {
+        attempted: true,
+        sent: true,
+        attempts: 1,
+        format: 'adaptive_card'
+    });
 
     await fetchJson(`${baseUrl}/api/cves/CVE-2026-2004/progress`, {
         method: 'PATCH',
@@ -268,7 +273,94 @@ test('progress Teams notifications are best-effort for imports, status changes, 
     });
     assert.equal(failedNote.notifications.teams.attempted, true);
     assert.equal(failedNote.notifications.teams.sent, false);
+    assert.equal(failedNote.notifications.teams.format, 'adaptive_card');
     assert.match(failedNote.notifications.teams.error, /Teams down/);
+});
+
+test('company assets API creates matches, filters CVEs, and boosts triage order', async (t) => {
+    const { baseUrl, insertOrUpdateCve } = await startTestServer(t);
+    insertOrUpdateCve({
+        id: 'CVE-2026-3001',
+        source: 'nvd',
+        description: 'Medium severity issue in Microsoft Exchange Server',
+        cvss_score: 5.5,
+        severity: 'medium',
+        published_at: '2026-04-30T00:00:00Z',
+        search_metadata: {
+            vulnerable_cpes: ['cpe:2.3:a:microsoft:exchange_server:*:*:*:*:*:*:*:*']
+        }
+    });
+    insertOrUpdateCve({
+        id: 'CVE-2026-3002',
+        source: 'nvd',
+        description: 'Critical issue in unrelated product',
+        cvss_score: 9.8,
+        severity: 'critical',
+        published_at: '2026-04-30T01:00:00Z'
+    });
+
+    const created = await fetchJson(`${baseUrl}/api/company-assets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            name: 'Corporate Exchange',
+            type: 'application',
+            vendor: 'Microsoft',
+            product: 'Exchange Server',
+            cpe_uris: ['cpe:2.3:a:microsoft:exchange_server:*:*:*:*:*:*:*:*'],
+            criticality: 'high'
+        })
+    });
+    assert.equal(created.data.match_count, 1);
+
+    const companyCves = await fetchJson(`${baseUrl}/api/cves?companyAffected=true&limit=10`);
+    assert.equal(companyCves.data.length, 1);
+    assert.equal(companyCves.data[0].id, 'CVE-2026-3001');
+    assert.equal(companyCves.data[0].company_match_count, 1);
+    assert.equal(companyCves.data[0].company_matches[0].asset_name, 'Corporate Exchange');
+
+    const byAsset = await fetchJson(`${baseUrl}/api/cves?assetId=${created.data.id}&limit=10`);
+    assert.deepEqual(byAsset.data.map(cve => cve.id), ['CVE-2026-3001']);
+
+    const triage = await fetchJson(`${baseUrl}/api/cves?sort=triage&limit=10`);
+    assert.equal(triage.data[0].id, 'CVE-2026-3001');
+
+    const recalculated = await fetchJson(`${baseUrl}/api/company-assets/recalculate`, { method: 'POST' });
+    assert.equal(recalculated.data.matches, 1);
+});
+
+test('company asset CSV import endpoint updates inventory and recalculates matches', async (t) => {
+    const { baseUrl, insertOrUpdateCve } = await startTestServer(t);
+    insertOrUpdateCve({
+        id: 'CVE-2026-3003',
+        source: 'github',
+        description: 'Django package vulnerability',
+        cvss_score: 8,
+        severity: 'high',
+        published_at: '2026-04-30T00:00:00Z',
+        search_metadata: {
+            packages: [{ ecosystem: 'PyPI', name: 'django', vulnerable_version_range: '<4.2.8' }]
+        }
+    });
+
+    const imported = await fetchJson(`${baseUrl}/api/company-assets/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            csv: 'name,type,vendor,product,packages,criticality,enabled\nCustomer Portal,application,DSF,Django,PyPI:django,high,true\n'
+        })
+    });
+
+    assert.equal(imported.data.summary.imported, 1);
+    assert.equal(imported.data.recalculation.matches, 1);
+
+    const assets = await fetchJson(`${baseUrl}/api/company-assets`);
+    assert.equal(assets.data[0].name, 'Customer Portal');
+    assert.equal(assets.data[0].match_count, 1);
+
+    const cves = await fetchJson(`${baseUrl}/api/cves?companyAffected=true&limit=10`);
+    assert.equal(cves.data[0].id, 'CVE-2026-3003');
+    assert.equal(cves.data[0].company_matches[0].match_type, 'package_exact');
 });
 
 async function startTestServer(t, options = {}) {

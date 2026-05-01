@@ -66,6 +66,7 @@ export async function fetchGithubAdvisories(token) {
                 else if (adv.severity === 'HIGH') cvssScore = 8.0;
                 else if (adv.severity === 'MEDIUM') cvssScore = 5.5;
                 else cvssScore = 3.0;
+                const packages = collectGithubPackages(adv.vulnerabilities?.nodes || []);
 
                 insertOrUpdateCve({
                     id: cveId,
@@ -74,7 +75,9 @@ export async function fetchGithubAdvisories(token) {
                     cvss_score: cvssScore,
                     cvss_vector: null,
                     severity: getSeverity(cvssScore),
-                    published_at: adv.publishedAt
+                    published_at: adv.publishedAt,
+                    search_text: packages.map(pkg => `${pkg.ecosystem || ''} ${pkg.name || ''} ${pkg.vulnerable_version_range || ''}`).join(' '),
+                    search_metadata: { packages }
                 });
                 totalCount++;
             }
@@ -112,6 +115,7 @@ async function fetchGithubAdvisoriesPublic() {
             if (!cveId) continue;
 
             let cvssScore = adv.cvss?.score || 5.0;
+            const packages = collectGithubPackages(adv.vulnerabilities || []);
 
             insertOrUpdateCve({
                 id: cveId,
@@ -120,7 +124,9 @@ async function fetchGithubAdvisoriesPublic() {
                 cvss_score: cvssScore,
                 cvss_vector: adv.cvss?.vector_string || null,
                 severity: getSeverity(cvssScore),
-                published_at: adv.published_at
+                published_at: adv.published_at,
+                search_text: packages.map(pkg => `${pkg.ecosystem || ''} ${pkg.name || ''} ${pkg.vulnerable_version_range || ''}`).join(' '),
+                search_metadata: { packages }
             });
             count++;
         }
@@ -133,6 +139,17 @@ async function fetchGithubAdvisoriesPublic() {
         console.error(`[GitHub Public] Error: ${error.message}`);
         throw error;
     }
+}
+
+export function collectGithubPackages(vulnerabilities = []) {
+    return (vulnerabilities || [])
+        .map(vulnerability => ({
+            name: vulnerability.package?.name || vulnerability.package?.name_with_owner || vulnerability.package_name || vulnerability.packageName || null,
+            ecosystem: vulnerability.package?.ecosystem || vulnerability.ecosystem || null,
+            vulnerable_version_range: vulnerability.vulnerableVersionRange || vulnerability.vulnerable_version_range || vulnerability.vulnerable_requirements || null
+        }))
+        .filter(pkg => pkg.name || pkg.ecosystem)
+        .slice(0, 50);
 }
 
 export default { fetchGithubAdvisories };

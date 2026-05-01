@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { copyFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
+import { matchAssetToCve, normalizeCompanyAssetInput } from '../services/companyAssets.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -49,7 +50,9 @@ const CVE_PROGRESS_SELECT = `
     progress.status AS progress_status,
     progress.created_at AS progress_created_at,
     progress.updated_at AS progress_updated_at,
-    COALESCE(note_counts.note_count, 0) AS progress_note_count
+    COALESCE(note_counts.note_count, 0) AS progress_note_count,
+    COALESCE(company_summary.match_count, 0) AS company_match_count,
+    COALESCE(company_summary.priority_score, 0) AS company_priority_score
 `;
 const CVE_PROGRESS_JOINS = `
     LEFT JOIN (
@@ -66,6 +69,14 @@ const CVE_PROGRESS_JOINS = `
         FROM cve_progress_notes
         GROUP BY cve_id
     ) note_counts ON note_counts.cve_id = cves.id
+    LEFT JOIN (
+        SELECT
+            cve_id,
+            COUNT(*) AS match_count,
+            MAX(score) AS priority_score
+        FROM cve_asset_matches
+        GROUP BY cve_id
+    ) company_summary ON company_summary.cve_id = cves.id
 `;
 
 let db = null;
@@ -185,6 +196,7 @@ function migrateSchema() {
             END
         WHERE status = 'success'
     `);
+    ensureCompanyAssetTables();
 }
 
 function ensureSchemaMigrationTable() {
@@ -221,6 +233,49 @@ function migrateCveSourcesSchema() {
     `);
     db.run('DROP TABLE cve_sources;');
     db.run('ALTER TABLE cve_sources_new RENAME TO cve_sources;');
+}
+
+function ensureCompanyAssetTables() {
+    db.run(`
+        CREATE TABLE IF NOT EXISTS company_assets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'application' CHECK(type IN ('service', 'application')),
+            vendor TEXT,
+            product TEXT,
+            version TEXT,
+            aliases TEXT,
+            cpe_uris TEXT,
+            packages TEXT,
+            criticality TEXT NOT NULL DEFAULT 'medium' CHECK(criticality IN ('low', 'medium', 'high')),
+            enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+            notes TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    `);
+    db.run(`
+        CREATE TABLE IF NOT EXISTS cve_asset_matches (
+            cve_id TEXT NOT NULL,
+            asset_id INTEGER NOT NULL,
+            match_type TEXT NOT NULL,
+            match_reason TEXT NOT NULL,
+            matched_value TEXT,
+            confidence REAL NOT NULL,
+            score INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (cve_id, asset_id),
+            FOREIGN KEY (cve_id) REFERENCES cves(id) ON DELETE CASCADE,
+            FOREIGN KEY (asset_id) REFERENCES company_assets(id) ON DELETE CASCADE
+        );
+    `);
+    db.run('CREATE INDEX IF NOT EXISTS idx_company_assets_enabled ON company_assets(enabled);');
+    db.run('CREATE INDEX IF NOT EXISTS idx_company_assets_type ON company_assets(type);');
+    db.run('CREATE INDEX IF NOT EXISTS idx_company_assets_criticality ON company_assets(criticality);');
+    db.run('CREATE INDEX IF NOT EXISTS idx_cve_asset_matches_cve ON cve_asset_matches(cve_id);');
+    db.run('CREATE INDEX IF NOT EXISTS idx_cve_asset_matches_asset ON cve_asset_matches(asset_id);');
+    db.run('CREATE INDEX IF NOT EXISTS idx_cve_asset_matches_score ON cve_asset_matches(score);');
 }
 
 function getTableSql(tableName) {
@@ -515,6 +570,7 @@ export function insertOrUpdateCve(cve) {
     }
 
     indexCveSearch(getCveById(normalizedCve.id), normalizedCve.search_text, normalizedCve.search_metadata);
+    recalculateCompanyAssetMatches({ cveId: normalizedCve.id, save: false });
     recordRefreshWrite(normalizedCve.source, 'cves', !existing);
     saveDb();
     return { changes: 1, inserted: !existing, updated: Boolean(existing) };
@@ -767,6 +823,370 @@ export function addCveProgressNote(cveId, note) {
     return getCveProgressDetail(cveId);
 }
 
+export function getCompanyAssets(filters = {}) {
+    const database = getDb();
+    let query = `
+        SELECT
+            company_assets.*,
+            COALESCE(match_counts.match_count, 0) AS match_count
+        FROM company_assets
+        LEFT JOIN (
+            SELECT asset_id, COUNT(*) AS match_count
+            FROM cve_asset_matches
+            GROUP BY asset_id
+        ) match_counts ON match_counts.asset_id = company_assets.id
+        WHERE 1=1
+    `;
+    const params = [];
+
+    if (filters.enabled !== undefined && filters.enabled !== null && filters.enabled !== '') {
+        query += ' AND company_assets.enabled = ?';
+        params.push(filters.enabled ? 1 : 0);
+    }
+    if (filters.search) {
+        query += ' AND (company_assets.name LIKE ? OR company_assets.vendor LIKE ? OR company_assets.product LIKE ? OR company_assets.aliases LIKE ? OR company_assets.notes LIKE ?)';
+        params.push(...Array(5).fill(`%${filters.search}%`));
+    }
+
+    query += `
+        ORDER BY
+            company_assets.enabled DESC,
+            CASE company_assets.criticality
+                WHEN 'high' THEN 0
+                WHEN 'medium' THEN 1
+                WHEN 'low' THEN 2
+                ELSE 3
+            END,
+            company_assets.name ASC
+        LIMIT ? OFFSET ?
+    `;
+    params.push(normalizeLimit(filters.limit), normalizeOffset(filters.offset));
+
+    const stmt = database.prepare(query);
+    stmt.bind(params);
+    const assets = [];
+    while (stmt.step()) {
+        assets.push(formatCompanyAsset(stmt.getAsObject()));
+    }
+    stmt.free();
+    return assets;
+}
+
+export function getCompanyAssetById(id) {
+    const assetId = normalizeAssetId(id);
+    if (!assetId) return null;
+
+    const stmt = getDb().prepare(`
+        SELECT
+            company_assets.*,
+            COALESCE(match_counts.match_count, 0) AS match_count
+        FROM company_assets
+        LEFT JOIN (
+            SELECT asset_id, COUNT(*) AS match_count
+            FROM cve_asset_matches
+            GROUP BY asset_id
+        ) match_counts ON match_counts.asset_id = company_assets.id
+        WHERE company_assets.id = ?
+        LIMIT 1
+    `);
+    stmt.bind([assetId]);
+    const asset = stmt.step() ? formatCompanyAsset(stmt.getAsObject()) : null;
+    stmt.free();
+    return asset;
+}
+
+export function createCompanyAsset(input) {
+    const normalized = normalizeCompanyAssetInput(input);
+    const asset = insertCompanyAsset(normalized);
+    const recalculation = recalculateCompanyAssetMatches({ assetId: asset.id, save: false });
+    saveDb();
+    return { ...getCompanyAssetById(asset.id), recalculation };
+}
+
+export function updateCompanyAsset(id, input) {
+    const assetId = normalizeAssetId(id);
+    const existing = getCompanyAssetById(assetId);
+    if (!existing) {
+        const error = new Error('Asset not found');
+        error.statusCode = 404;
+        throw error;
+    }
+
+    const normalized = normalizeCompanyAssetInput({ ...existing, ...input, id: assetId });
+    getDb().run(`
+        UPDATE company_assets
+        SET name = ?,
+            type = ?,
+            vendor = ?,
+            product = ?,
+            version = ?,
+            aliases = ?,
+            cpe_uris = ?,
+            packages = ?,
+            criticality = ?,
+            enabled = ?,
+            notes = ?,
+            updated_at = datetime('now')
+        WHERE id = ?
+    `, assetDbValues(normalized, assetId));
+
+    const recalculation = recalculateCompanyAssetMatches({ assetId, save: false });
+    saveDb();
+    return { ...getCompanyAssetById(assetId), recalculation };
+}
+
+export function deleteCompanyAsset(id) {
+    const assetId = normalizeAssetId(id);
+    const asset = getCompanyAssetById(assetId);
+    if (!asset) {
+        const error = new Error('Asset not found');
+        error.statusCode = 404;
+        throw error;
+    }
+
+    const database = getDb();
+    database.run('DELETE FROM cve_asset_matches WHERE asset_id = ?', [assetId]);
+    database.run('DELETE FROM company_assets WHERE id = ?', [assetId]);
+    saveDb();
+    return { deleted: true, asset };
+}
+
+export function importCompanyAssets(items = []) {
+    if (!Array.isArray(items)) {
+        const error = new Error('items must be an array');
+        error.statusCode = 400;
+        throw error;
+    }
+    if (!items.length) {
+        const error = new Error('At least one asset is required');
+        error.statusCode = 400;
+        throw error;
+    }
+    if (items.length > 500) {
+        const error = new Error('Asset import is limited to 500 rows at a time');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const summary = { total: items.length, imported: 0, updated: 0, failed: 0 };
+    const results = [];
+
+    for (const [index, item] of items.entries()) {
+        try {
+            const normalized = normalizeCompanyAssetInput(item);
+            const existing = findCompanyAssetByIdentity(normalized);
+            const asset = existing
+                ? updateCompanyAsset(existing.id, normalized)
+                : createCompanyAsset(normalized);
+            if (existing) summary.updated++;
+            else summary.imported++;
+            results.push({ index, success: true, action: existing ? 'updated' : 'imported', id: asset.id, name: asset.name });
+        } catch (error) {
+            summary.failed++;
+            results.push({ index, success: false, error: error.message });
+        }
+    }
+
+    const recalculation = recalculateCompanyAssetMatches({ save: false });
+    saveDb();
+    return { summary, recalculation, results };
+}
+
+export function recalculateCompanyAssetMatches(options = {}) {
+    const database = getDb();
+    const assetId = normalizeAssetId(options.assetId);
+    const cveId = options.cveId ? String(options.cveId).trim().toUpperCase() : null;
+    clearCompanyAssetMatches({ assetId, cveId });
+
+    const assets = getAssetsForMatching(assetId);
+    const cves = getCvesForMatching(cveId);
+    let matches = 0;
+
+    for (const cve of cves) {
+        const metadata = getCveSearchMetadata(cve.id);
+        for (const asset of assets) {
+            const match = matchAssetToCve(asset, cve, metadata);
+            if (!match) continue;
+            database.run(`
+                INSERT OR REPLACE INTO cve_asset_matches (
+                    cve_id,
+                    asset_id,
+                    match_type,
+                    match_reason,
+                    matched_value,
+                    confidence,
+                    score,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            `, [
+                cve.id,
+                asset.id,
+                match.match_type,
+                match.match_reason,
+                match.matched_value || null,
+                match.confidence,
+                match.score
+            ]);
+            matches++;
+        }
+    }
+
+    if (options.save !== false) saveDb();
+    return { assets: assets.length, cves: cves.length, matches };
+}
+
+function insertCompanyAsset(asset) {
+    const database = getDb();
+    database.run(`
+        INSERT INTO company_assets (
+            name,
+            type,
+            vendor,
+            product,
+            version,
+            aliases,
+            cpe_uris,
+            packages,
+            criticality,
+            enabled,
+            notes,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    `, assetDbValues(asset));
+
+    return getCompanyAssetById(lastInsertId());
+}
+
+function assetDbValues(asset, id = null) {
+    const values = [
+        asset.name,
+        asset.type,
+        asset.vendor || null,
+        asset.product || null,
+        asset.version || null,
+        JSON.stringify(asset.aliases || []),
+        JSON.stringify(asset.cpe_uris || []),
+        JSON.stringify(asset.packages || []),
+        asset.criticality,
+        asset.enabled ? 1 : 0,
+        asset.notes || null
+    ];
+    if (id !== null) values.push(id);
+    return values;
+}
+
+function lastInsertId() {
+    const stmt = getDb().prepare('SELECT last_insert_rowid() AS id');
+    stmt.step();
+    const id = Number(stmt.getAsObject().id);
+    stmt.free();
+    return id;
+}
+
+function findCompanyAssetByIdentity(asset) {
+    const stmt = getDb().prepare(`
+        SELECT id
+        FROM company_assets
+        WHERE LOWER(name) = LOWER(?)
+          AND LOWER(COALESCE(vendor, '')) = LOWER(?)
+          AND LOWER(COALESCE(product, '')) = LOWER(?)
+        LIMIT 1
+    `);
+    stmt.bind([asset.name, asset.vendor || '', asset.product || '']);
+    const row = stmt.step() ? stmt.getAsObject() : null;
+    stmt.free();
+    return row ? getCompanyAssetById(row.id) : null;
+}
+
+function clearCompanyAssetMatches(filters = {}) {
+    const conditions = [];
+    const params = [];
+    if (filters.assetId) {
+        conditions.push('asset_id = ?');
+        params.push(filters.assetId);
+    }
+    if (filters.cveId) {
+        conditions.push('cve_id = ?');
+        params.push(filters.cveId);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    getDb().run(`DELETE FROM cve_asset_matches ${where}`, params);
+}
+
+function getAssetsForMatching(assetId = null) {
+    const params = [];
+    let query = 'SELECT * FROM company_assets WHERE enabled = 1';
+    if (assetId) {
+        query += ' AND id = ?';
+        params.push(assetId);
+    }
+    query += ' ORDER BY id ASC';
+
+    const stmt = getDb().prepare(query);
+    stmt.bind(params);
+    const assets = [];
+    while (stmt.step()) {
+        assets.push(formatCompanyAsset(stmt.getAsObject()));
+    }
+    stmt.free();
+    return assets;
+}
+
+function getCvesForMatching(cveId = null) {
+    const params = [];
+    let query = 'SELECT * FROM cves';
+    if (cveId) {
+        query += ' WHERE id = ?';
+        params.push(cveId);
+    }
+    query += ' ORDER BY id ASC';
+
+    const stmt = getDb().prepare(query);
+    stmt.bind(params);
+    const cves = [];
+    while (stmt.step()) {
+        cves.push(stmt.getAsObject());
+    }
+    stmt.free();
+    return cves;
+}
+
+function getCveSearchMetadata(cveId) {
+    const document = getSearchDocument(`cve:${cveId}`);
+    return parseJson(document?.metadata) || {};
+}
+
+function formatCompanyAsset(row) {
+    if (!row) return null;
+    return {
+        id: Number(row.id),
+        name: row.name,
+        type: row.type,
+        vendor: row.vendor || null,
+        product: row.product || null,
+        version: row.version || null,
+        aliases: parseJson(row.aliases) || [],
+        cpe_uris: parseJson(row.cpe_uris) || [],
+        packages: parseJson(row.packages) || [],
+        criticality: row.criticality || 'medium',
+        enabled: Boolean(Number(row.enabled)),
+        notes: row.notes || null,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        match_count: Number(row.match_count || 0)
+    };
+}
+
+function normalizeAssetId(value) {
+    const id = Number.parseInt(value, 10);
+    return Number.isFinite(id) && id > 0 ? id : null;
+}
+
 export function getCves(filters = {}) {
     const database = getDb();
     let query = `
@@ -805,6 +1225,13 @@ export function getCves(filters = {}) {
     }
     if (filters.needsReview) {
         query += " AND cves.severity IN ('critical', 'high') AND progress.status IS NULL";
+    }
+    if (filters.companyAffected) {
+        query += ' AND COALESCE(company_summary.match_count, 0) > 0';
+    }
+    if (filters.assetId) {
+        query += ' AND EXISTS (SELECT 1 FROM cve_asset_matches asset_filter WHERE asset_filter.cve_id = cves.id AND asset_filter.asset_id = ?)';
+        params.push(filters.assetId);
     }
 
     query += cveSortClause(filters.sort);
@@ -940,9 +1367,22 @@ export function getStats() {
     }
     sourceStmt.free();
 
+    const assetStmt = database.prepare(`
+        SELECT
+            COUNT(*) AS total,
+            COALESCE(SUM(CASE WHEN enabled = 1 THEN 1 ELSE 0 END), 0) AS enabled,
+            COALESCE(SUM(CASE WHEN criticality = 'high' THEN 1 ELSE 0 END), 0) AS high,
+            (SELECT COUNT(DISTINCT cve_id) FROM cve_asset_matches) AS matched_cves
+        FROM company_assets
+    `);
+    assetStmt.step();
+    const assetStats = assetStmt.getAsObject();
+    assetStmt.free();
+
     return {
         cves: cveStats,
         iocs: iocStats,
+        assets: assetStats,
         recent24h: recentCves,
         sources: sourceStats,
         triage: getTriageStats()
@@ -1079,6 +1519,7 @@ export function enrichCveSearch(cveId, metadata = {}, extraText = '') {
     const existing = getSearchDocument(`cve:${cve.id}`);
     const existingMetadata = parseJson(existing?.metadata) || {};
     indexCveSearch(cve, extraText, { ...existingMetadata, ...metadata });
+    recalculateCompanyAssetMatches({ cveId: cve.id, save: false });
     saveDb();
     return true;
 }
@@ -1366,6 +1807,8 @@ function cveSortClause(sort) {
         case 'triage':
             return `
                 ORDER BY
+                    CASE WHEN COALESCE(company_summary.priority_score, 0) > 0 THEN 0 ELSE 1 END,
+                    COALESCE(company_summary.priority_score, 0) DESC,
                     CASE cves.severity
                         WHEN 'critical' THEN 0
                         WHEN 'high' THEN 1
@@ -1458,8 +1901,50 @@ function hydrateCveRow(row) {
     const sources = uniqueSources(row.sources_csv || row.source);
     row.sources = sources;
     row.is_kev = Boolean(Number(row.is_kev) || sources.includes('cisa_kev'));
+    row.company_match_count = Number(row.company_match_count || 0);
+    row.company_priority_score = Number(row.company_priority_score || 0);
+    row.company_matches = row.company_match_count > 0 ? getCveCompanyMatches(row.id) : [];
     delete row.sources_csv;
     return row;
+}
+
+function getCveCompanyMatches(cveId) {
+    const stmt = getDb().prepare(`
+        SELECT
+            matches.asset_id,
+            assets.name AS asset_name,
+            assets.type AS asset_type,
+            assets.criticality,
+            matches.match_type,
+            matches.match_reason,
+            matches.matched_value,
+            matches.confidence,
+            matches.score,
+            matches.updated_at
+        FROM cve_asset_matches matches
+        JOIN company_assets assets ON assets.id = matches.asset_id
+        WHERE matches.cve_id = ?
+        ORDER BY matches.score DESC, matches.confidence DESC, assets.name ASC
+    `);
+    stmt.bind([cveId]);
+    const matches = [];
+    while (stmt.step()) {
+        const row = stmt.getAsObject();
+        matches.push({
+            asset_id: Number(row.asset_id),
+            asset_name: row.asset_name,
+            asset_type: row.asset_type,
+            criticality: row.criticality,
+            match_type: row.match_type,
+            match_reason: row.match_reason,
+            matched_value: row.matched_value || null,
+            confidence: Number(row.confidence || 0),
+            score: Number(row.score || 0),
+            updated_at: row.updated_at
+        });
+    }
+    stmt.free();
+    return matches;
 }
 
 function uniqueSources(value) {
@@ -1525,6 +2010,13 @@ export default {
     getCveProgressDetail,
     setCveProgressStatus,
     addCveProgressNote,
+    getCompanyAssets,
+    getCompanyAssetById,
+    createCompanyAsset,
+    updateCompanyAsset,
+    deleteCompanyAsset,
+    importCompanyAssets,
+    recalculateCompanyAssetMatches,
     getCves,
     getIocs,
     getStats,

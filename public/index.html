@@ -21,22 +21,27 @@
             </div>
 
             <nav class="main-tabs" aria-label="Dashboard sections">
-                <button class="main-tab active" onclick="switchMainTab('cves', this)">
+                <button class="main-tab active" data-tab="cves" onclick="switchMainTab('cves', this)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 4v6c0 5-3.4 7.7-8 9-4.6-1.3-8-4-8-9V7l8-4z"/><path d="M9 12l2 2 4-5"/></svg>
                     <span>CVEs</span>
                     <small>Vulnerabilities</small>
                 </button>
-                <button class="main-tab" onclick="switchMainTab('iocs', this)">
+                <button class="main-tab" data-tab="iocs" onclick="switchMainTab('iocs', this)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M9 9h6v6H9z"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>
                     <span>IOCs</span>
                     <small>Indicators</small>
                 </button>
-                <button class="main-tab" onclick="switchMainTab('progress', this)">
+                <button class="main-tab" data-tab="progress" onclick="switchMainTab('progress', this)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h7"/><path d="M16 17l2 2 4-5"/></svg>
                     <span>Progress</span>
                     <small>Triage notes</small>
                 </button>
-                <button class="main-tab" onclick="switchMainTab('feeds', this)">
+                <button class="main-tab" data-tab="assets" onclick="switchMainTab('assets', this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9h1M9 13h1M9 17h1M15 13h1M15 17h1"/></svg>
+                    <span>Assets</span>
+                    <small>Company use</small>
+                </button>
+                <button class="main-tab" data-tab="feeds" onclick="switchMainTab('feeds', this)">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>
                     <span>Feeds</span>
                     <small>Source health</small>
@@ -82,6 +87,8 @@
                     <div class="stat-card"><div class="stat-label">Total CVEs</div><div class="stat-value" id="statTotalCves">-</div></div>
                     <div class="stat-card critical"><div class="stat-label">Critical</div><div class="stat-value" id="statCritical">-</div></div>
                     <div class="stat-card high"><div class="stat-label">High</div><div class="stat-value" id="statHigh">-</div></div>
+                    <div class="stat-card company"><div class="stat-label">Company Assets</div><div class="stat-value" id="statCompanyAssets">-</div></div>
+                    <div class="stat-card company"><div class="stat-label">Company Matches</div><div class="stat-value" id="statCompanyMatches">-</div></div>
                     <div class="stat-card ioc"><div class="stat-label">Malware URLs</div><div class="stat-value" id="statUrls">-</div></div>
                     <div class="stat-card ioc"><div class="stat-label">Malware Hashes</div><div class="stat-value" id="statHashes">-</div></div>
                     <div class="stat-card ioc"><div class="stat-label">Suspicious IPs</div><div class="stat-value" id="statIps">-</div></div>
@@ -162,6 +169,12 @@
                             <button class="filter-btn" data-cve-progress="open" onclick="filterCveProgress('open')">Open</button>
                             <button class="filter-btn" data-cve-progress="assigned" onclick="filterCveProgress('assigned')">Assigned</button>
                             <button class="filter-btn" data-cve-progress="closed" onclick="filterCveProgress('closed')">Closed</button>
+                        </div>
+                        <div class="filter-row" id="cveCompanyFilters">
+                            <button class="filter-btn" id="companyAffectedBtn" onclick="filterCompanyAffected()">Company Impact</button>
+                            <select class="filter-select" id="cveAssetFilter" onchange="filterCveAsset(this.value)">
+                                <option value="all">All Assets</option>
+                            </select>
                         </div>
                         <div class="list-container" id="cveList"><div class="loader"><div class="spinner"></div></div></div>
                     </div>
@@ -262,6 +275,42 @@
                     <div class="panel">
                         <div class="panel-header"><span class="panel-title">Feed Status</span></div>
                         <div class="detail-content" id="feedStatusContent"><div class="loader"><div class="spinner"></div></div></div>
+                    </div>
+                </div>
+
+                <div id="assetsPanel" class="content-grid" style="display: none;">
+                    <div class="panel">
+                        <div class="panel-header">
+                            <span class="panel-title">Asset Inventory</span>
+                            <div class="search-box">
+                                <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                                <input type="text" class="search-input" id="assetSearch" placeholder="Search assets..." oninput="debounceSearchAssets()">
+                            </div>
+                        </div>
+                        <div class="import-panel" aria-label="Import assets">
+                            <div class="import-inputs">
+                                <textarea class="note-input import-textarea" id="assetImportText" maxlength="20000" placeholder="name,type,vendor,product,version,aliases,cpe_uris,packages,criticality,enabled,notes" oninput="updateAssetImportPreview()"></textarea>
+                                <div class="import-actions">
+                                    <label class="btn file-btn">
+                                        <input type="file" id="assetImportCsv" accept=".csv,text/csv" onchange="handleAssetImportCsvFile(event)">
+                                        CSV
+                                    </label>
+                                    <button class="btn primary" id="assetImportBtn" onclick="importCompanyAssetRows()">Import Assets</button>
+                                </div>
+                            </div>
+                            <div class="import-preview" id="assetImportPreview">No assets selected.</div>
+                        </div>
+                        <div class="filter-row">
+                            <button class="filter-btn" onclick="clearAssetEditor()">New Asset</button>
+                            <button class="filter-btn" onclick="recalculateCompanyAssets()">Recalculate</button>
+                            <span class="count-label" id="assetCount">0 items</span>
+                        </div>
+                        <div class="list-container" id="assetList"><div class="loader"><div class="spinner"></div></div></div>
+                    </div>
+
+                    <div class="panel">
+                        <div class="panel-header"><span class="panel-title">Asset Details</span></div>
+                        <div class="detail-panel" id="assetDetailPanel"></div>
                     </div>
                 </div>
             </section>

@@ -81,6 +81,38 @@ CREATE TABLE IF NOT EXISTS cve_progress_notes (
     FOREIGN KEY (cve_id) REFERENCES cves(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS company_assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'application' CHECK(type IN ('service', 'application')),
+    vendor TEXT,
+    product TEXT,
+    version TEXT,
+    aliases TEXT,
+    cpe_uris TEXT,
+    packages TEXT,
+    criticality TEXT NOT NULL DEFAULT 'medium' CHECK(criticality IN ('low', 'medium', 'high')),
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+    notes TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS cve_asset_matches (
+    cve_id TEXT NOT NULL,
+    asset_id INTEGER NOT NULL,
+    match_type TEXT NOT NULL,
+    match_reason TEXT NOT NULL,
+    matched_value TEXT,
+    confidence REAL NOT NULL,
+    score INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (cve_id, asset_id),
+    FOREIGN KEY (cve_id) REFERENCES cves(id) ON DELETE CASCADE,
+    FOREIGN KEY (asset_id) REFERENCES company_assets(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS app_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -126,6 +158,12 @@ CREATE INDEX IF NOT EXISTS idx_cve_progress_tags_status ON cve_progress_tags(sta
 CREATE INDEX IF NOT EXISTS idx_cve_progress_tags_updated ON cve_progress_tags(updated_at);
 CREATE INDEX IF NOT EXISTS idx_cve_progress_notes_cve ON cve_progress_notes(cve_id);
 CREATE INDEX IF NOT EXISTS idx_cve_progress_notes_created ON cve_progress_notes(created_at);
+CREATE INDEX IF NOT EXISTS idx_company_assets_enabled ON company_assets(enabled);
+CREATE INDEX IF NOT EXISTS idx_company_assets_type ON company_assets(type);
+CREATE INDEX IF NOT EXISTS idx_company_assets_criticality ON company_assets(criticality);
+CREATE INDEX IF NOT EXISTS idx_cve_asset_matches_cve ON cve_asset_matches(cve_id);
+CREATE INDEX IF NOT EXISTS idx_cve_asset_matches_asset ON cve_asset_matches(asset_id);
+CREATE INDEX IF NOT EXISTS idx_cve_asset_matches_score ON cve_asset_matches(score);
 CREATE INDEX IF NOT EXISTS idx_search_documents_type ON search_documents(entity_type);
 CREATE INDEX IF NOT EXISTS idx_search_documents_source ON search_documents(source);
 CREATE INDEX IF NOT EXISTS idx_search_documents_date ON search_documents(date);

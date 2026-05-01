@@ -1,5 +1,7 @@
 import axios from 'axios';
 
+const MAX_TEAMS_PAYLOAD_BYTES = 28 * 1024;
+const SUPPORTED_FORMATS = ['adaptive_card', 'text'];
 const EVENT_TITLES = {
     import_summary: 'CVE progress import completed',
     status_changed: 'CVE progress status changed',
@@ -18,16 +20,33 @@ export async function notifyTeamsProgress(event, payload = {}, config = {}) {
     }
 
     try {
-        await axios.post(teams.webhookUrl, buildTeamsPayload(event, payload), {
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 15000
-        });
-        return { attempted: true, sent: true };
+        const body = buildTeamsWebhookBody(event, payload, teams);
+        validatePayloadSize(body);
+        const result = await postTeamsWebhook(teams.webhookUrl, body, teams);
+        return {
+            attempted: true,
+            sent: true,
+            attempts: result.attempts,
+            format: normalizeWebhookFormat(teams.format)
+        };
     } catch (error) {
-        const message = error.response?.data?.message || error.response?.data?.error?.message || error.message;
+        const message = teamsErrorMessage(error);
         console.error(`[Teams] Failed to send ${event}: ${message}`);
-        return { attempted: true, sent: false, error: message };
+        return {
+            attempted: true,
+            sent: false,
+            attempts: error.attempts || 1,
+            format: normalizeWebhookFormat(teams.format),
+            error: message
+        };
     }
+}
+
+export function buildTeamsWebhookBody(event, payload = {}, config = {}) {
+    const format = normalizeWebhookFormat(config.format);
+    return format === 'text'
+        ? buildTeamsTextPayload(event, payload)
+        : buildTeamsPayload(event, payload);
 }
 
 export function buildTeamsPayload(event, payload = {}) {
@@ -72,6 +91,45 @@ export function buildTeamsPayload(event, payload = {}) {
             }
         ]
     };
+}
+
+export function buildTeamsTextPayload(event, payload = {}) {
+    const title = EVENT_TITLES[event] || 'CVE progress update';
+    const facts = factsForEvent(event, payload)
+        .filter(item => item.value !== 'N/A')
+        .map(item => `- ${item.title}: ${item.value}`);
+
+    return {
+        text: [
+            `**${title}**`,
+            summaryForEvent(event, payload),
+            ...facts
+        ].join('\n\n')
+    };
+}
+
+async function postTeamsWebhook(url, body, teams) {
+    const maxAttempts = normalizeInteger(teams.maxAttempts, 2, { min: 1, max: 5 });
+    const retryDelayMs = normalizeInteger(teams.retryDelayMs, 500, { min: 0 });
+    const timeout = normalizeInteger(teams.timeoutMs, 15000, { min: 1000 });
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            await axios.post(url, body, {
+                headers: { 'Content-Type': 'application/json' },
+                timeout
+            });
+            return { attempts: attempt };
+        } catch (error) {
+            error.attempts = attempt;
+            if (attempt >= maxAttempts || !isRetryableTeamsError(error)) {
+                throw error;
+            }
+            await sleep(retryDelay(error, attempt, retryDelayMs));
+        }
+    }
+
+    return { attempts: maxAttempts };
 }
 
 function factsForEvent(event, payload) {
@@ -135,6 +193,9 @@ function formatScore(value) {
 
 function validateTeamsConfig(teams) {
     if (!teams.webhookUrl) return 'TEAMS_WEBHOOK_URL is not configured';
+    if (!SUPPORTED_FORMATS.includes(normalizeWebhookFormat(teams.format))) {
+        return `TEAMS_WEBHOOK_FORMAT must be one of: ${SUPPORTED_FORMATS.join(', ')}`;
+    }
     try {
         const url = new URL(teams.webhookUrl);
         if (url.protocol !== 'https:') return 'TEAMS_WEBHOOK_URL must use HTTPS';
@@ -144,4 +205,55 @@ function validateTeamsConfig(teams) {
     return null;
 }
 
-export default { notifyTeamsProgress, buildTeamsPayload };
+function validatePayloadSize(body) {
+    const size = Buffer.byteLength(JSON.stringify(body), 'utf8');
+    if (size > MAX_TEAMS_PAYLOAD_BYTES) {
+        throw new Error(`Teams payload is ${size} bytes, above the ${MAX_TEAMS_PAYLOAD_BYTES} byte limit`);
+    }
+}
+
+function normalizeWebhookFormat(format) {
+    const normalized = String(format || 'adaptive_card').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    return normalized === 'adaptivecard' ? 'adaptive_card' : normalized;
+}
+
+function normalizeInteger(value, fallback, options = {}) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+
+    const min = options.min ?? Number.NEGATIVE_INFINITY;
+    const max = options.max ?? Number.POSITIVE_INFINITY;
+    return Math.trunc(Math.min(max, Math.max(min, parsed)));
+}
+
+function teamsErrorMessage(error) {
+    if (typeof error.response?.data === 'string' && error.response.data.trim()) {
+        return error.response.data.trim();
+    }
+    return error.response?.data?.message
+        || error.response?.data?.error?.message
+        || error.message
+        || 'Unknown Teams webhook error';
+}
+
+function isRetryableTeamsError(error) {
+    const status = error.response?.status;
+    if (status === 408 || status === 429) return true;
+    if (status >= 500 && status <= 599) return true;
+    return ['ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED', 'ENOTFOUND', 'EAI_AGAIN'].includes(error.code);
+}
+
+function retryDelay(error, attempt, fallbackDelayMs) {
+    const retryAfter = error.response?.headers?.['retry-after'];
+    const retryAfterSeconds = Number(retryAfter);
+    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0) {
+        return retryAfterSeconds * 1000;
+    }
+    return fallbackDelayMs * (2 ** (attempt - 1));
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export default { notifyTeamsProgress, buildTeamsPayload, buildTeamsTextPayload, buildTeamsWebhookBody };

@@ -4,11 +4,16 @@ let allCves = [];
         let filteredIocs = [];
         let progressItems = [];
         let filteredProgressItems = [];
+        let companyAssets = [];
+        let filteredCompanyAssets = [];
         let selectedItem = null;
         let selectedProgressItem = null;
+        let selectedAsset = null;
         let selectedIocType = 'all';
         let selectedSeverity = 'all';
         let selectedCveProgress = 'all';
+        let selectedCompanyAffected = false;
+        let selectedCompanyAssetId = 'all';
         let selectedProgressStatus = 'all';
         let selectedCveTimeRange = 'all';
         let selectedIocTimeRange = 'all';
@@ -20,6 +25,7 @@ let allCves = [];
         let isRefreshing = false;
         let globalSearchResults = [];
         let progressImportCsvItems = [];
+        let assetImportCsvItems = [];
 
         const API_BASE = '/api';
         const REQUEST_TIMEOUT_MS = 45000;
@@ -50,11 +56,13 @@ let allCves = [];
             try {
                 const data = await fetchJson(`${API_BASE}/stats`);
 
-                const { cves, iocs, recent24h, triage, lastRefresh, latestFeedAt } = data.data;
+                const { cves, iocs, assets, recent24h, triage, lastRefresh, latestFeedAt } = data.data;
                 document.getElementById('statTotalCves').textContent = cves.total || 0;
                 document.getElementById('statCritical').textContent = cves.critical || 0;
                 document.getElementById('statHigh').textContent = cves.high || 0;
                 document.getElementById('statRecent24h').textContent = recent24h || 0;
+                document.getElementById('statCompanyAssets').textContent = assets?.enabled || 0;
+                document.getElementById('statCompanyMatches').textContent = assets?.matched_cves || 0;
 
                 const iocMap = {};
                 (iocs || []).forEach(i => { iocMap[i.type] = i.count; });
@@ -82,6 +90,8 @@ let allCves = [];
             }
             const fromDate = getRangeStart(selectedCveTimeRange);
             if (fromDate) params.set('fromDate', fromDate);
+            if (selectedCompanyAffected) params.set('companyAffected', 'true');
+            if (selectedCompanyAssetId !== 'all') params.set('assetId', selectedCompanyAssetId);
             if (search) params.set('search', search);
 
             try {
@@ -113,6 +123,7 @@ let allCves = [];
                     <div class="item-header">
                         <a href="${sourceUrlForCve(cve)}" target="_blank" rel="noopener noreferrer" class="item-id" onclick="event.stopPropagation()">${escapeHtml(cve.id)}</a>
                         <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">
+                            ${renderCompanyImpactBadge(cve)}
                             ${renderProgressBadge(cve.progress_status, cve)}
                             <span class="severity-badge ${escapeHtml(cve.severity || 'low')}">${escapeHtml(cve.severity || 'low')}</span>
                         </div>
@@ -121,6 +132,7 @@ let allCves = [];
                     <div class="item-meta">
                         <span>CVSS: <span class="cvss-score">${(cve.cvss_score || 0).toFixed(1)}</span></span>
                         <span>${renderSourceSummary(cve)}</span>
+                        ${cve.company_match_count ? `<span>${escapeHtml(renderCompanyAssetSummary(cve))}</span>` : ''}
                         <span>Notes: ${cve.progress_note_count || 0}</span>
                         <span>${formatDate(cve.published_at)}</span>
                     </div>
@@ -157,6 +169,7 @@ let allCves = [];
                         <div class="detail-id">${escapeHtml(cve.id)}</div>
                         <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;">
                             <span class="severity-badge ${escapeHtml(cve.severity || 'low')}">${escapeHtml(cve.severity?.toUpperCase() || 'LOW')}</span>
+                            ${renderCompanyImpactBadge(cve)}
                             ${renderProgressBadge(cve.progress_status, cve)}
                         </div>
                         <p class="detail-desc">${escapeHtml(cve.description || 'No description available')}</p>
@@ -183,6 +196,7 @@ let allCves = [];
                         <h3 class="detail-section-title">Sources</h3>
                         ${renderSourceBadges(cve)}
                     </div>
+                    ${renderCompanyMatches(cve)}
                     <div class="detail-section">
                         <h3 class="detail-section-title">Progress Tag</h3>
                         ${renderProgressControls(cve)}
@@ -206,6 +220,48 @@ let allCves = [];
             if (!status && isNeedsReview(cve)) return '<span class="progress-badge needs-review">Needs Review</span>';
             if (!status) return '<span class="progress-badge untagged">Untagged</span>';
             return `<span class="progress-badge ${escapeHtml(status)}">${escapeHtml(status)}</span>`;
+        }
+
+        function renderCompanyImpactBadge(cve) {
+            const count = Number(cve?.company_match_count || 0);
+            if (!count) return '';
+            const label = count === 1 ? 'Company Impact' : `Company Impact x${count}`;
+            return `<span class="company-badge">${escapeHtml(label)}</span>`;
+        }
+
+        function renderCompanyAssetSummary(cve) {
+            const matches = cve.company_matches || [];
+            if (!matches.length) return `${cve.company_match_count || 0} company match(es)`;
+            const names = matches.slice(0, 2).map(match => match.asset_name).filter(Boolean);
+            return names.length
+                ? `Assets: ${names.join(', ')}${matches.length > 2 ? ` +${matches.length - 2}` : ''}`
+                : `${cve.company_match_count || 0} company match(es)`;
+        }
+
+        function renderCompanyMatches(cve) {
+            const matches = cve.company_matches || [];
+            if (!matches.length) return '';
+            return `
+                <div class="detail-section">
+                    <h3 class="detail-section-title">Company Impact</h3>
+                    <div class="asset-match-list">
+                        ${matches.map(match => `
+                            <div class="asset-match-item">
+                                <div class="asset-match-title">
+                                    <span>${escapeHtml(match.asset_name || 'Asset')}</span>
+                                    <span class="asset-badge ${escapeHtml(match.criticality || 'medium')}">${escapeHtml(match.criticality || 'medium')}</span>
+                                </div>
+                                <div class="asset-match-reason">${escapeHtml(match.match_reason || '')}</div>
+                                <div class="item-meta">
+                                    <span>${escapeHtml(match.match_type || 'match')}</span>
+                                    <span>Confidence: ${Math.round((match.confidence || 0) * 100)}%</span>
+                                    <span>Score: ${match.score || 0}</span>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
         }
 
         function renderSourceBadges(cve) {
@@ -445,6 +501,7 @@ let allCves = [];
                     <div class="item-header">
                         <a href="${sourceUrlForCve(cve)}" target="_blank" rel="noopener noreferrer" class="item-id" onclick="event.stopPropagation()">${escapeHtml(cve.id)}</a>
                         <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">
+                            ${renderCompanyImpactBadge(cve)}
                             ${renderProgressBadge(cve.progress_status, cve)}
                             <span class="severity-badge ${escapeHtml(cve.severity || 'low')}">${escapeHtml(cve.severity || 'low')}</span>
                         </div>
@@ -486,6 +543,7 @@ let allCves = [];
                     <div class="detail-header">
                         <div class="detail-id">${escapeHtml(cve.id)}</div>
                         <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;">
+                            ${renderCompanyImpactBadge(cve)}
                             ${renderProgressBadge(cve.progress_status, cve)}
                             <span class="severity-badge ${escapeHtml(cve.severity || 'low')}">${escapeHtml(cve.severity?.toUpperCase() || 'LOW')}</span>
                         </div>
@@ -495,6 +553,7 @@ let allCves = [];
                         <h3 class="detail-section-title">Sources</h3>
                         ${renderSourceBadges(cve)}
                     </div>
+                    ${renderCompanyMatches(cve)}
                     <div class="detail-section">
                         <h3 class="detail-section-title">Progress Tag</h3>
                         ${renderProgressControls(cve)}
@@ -616,13 +675,17 @@ let allCves = [];
                 }, REFRESH_TIMEOUT_MS);
                 const summary = response.data?.summary || {};
                 const teams = response.notifications?.teams;
-                const teamsWarning = teams?.attempted && !teams.sent ? ` Teams: ${teams.error || 'not sent'}.` : '';
+                const teamsMessage = teams?.sent
+                    ? ' Teams notified.'
+                    : teams?.attempted && !teams.sent
+                        ? ` Teams: ${teams.error || 'not sent'}.`
+                        : '';
 
                 document.getElementById('progressImportText').value = '';
                 document.getElementById('progressImportCsv').value = '';
                 progressImportCsvItems = [];
                 updateImportPreview(
-                    `Imported ${summary.imported || 0}, updated ${summary.updated || 0}, placeholders ${summary.placeholders || 0}, failed ${summary.failed || 0}.${teamsWarning}`,
+                    `Imported ${summary.imported || 0}, updated ${summary.updated || 0}, placeholders ${summary.placeholders || 0}, failed ${summary.failed || 0}.${teamsMessage}`,
                     summary.failed ? 'error' : 'success'
                 );
                 setRefreshStatus(`Progress import completed: ${summary.imported || 0} imported, ${summary.updated || 0} updated.`, summary.failed ? '' : 'success');
@@ -639,6 +702,368 @@ let allCves = [];
                 btn.disabled = false;
                 btn.textContent = 'Import CVEs';
             }
+        }
+
+        async function fetchCompanyAssets(search = '') {
+            const params = new URLSearchParams({ limit: 500, offset: 0 });
+            if (search) params.set('search', search);
+
+            try {
+                const list = document.getElementById('assetList');
+                if (list) list.innerHTML = '<div class="loader"><div class="spinner"></div></div>';
+                const data = await fetchJson(`${API_BASE}/company-assets?${params}`);
+                companyAssets = data.data || [];
+                filteredCompanyAssets = [...companyAssets];
+                if (selectedAsset?.id) {
+                    selectedAsset = filteredCompanyAssets.find(asset => asset.id === selectedAsset.id) || null;
+                }
+                renderAssetList();
+                updateAssetFilterOptions();
+                if (activeTab === 'assets') renderAssetEditor(selectedAsset);
+            } catch (e) {
+                const list = document.getElementById('assetList');
+                if (list) list.innerHTML = `<div class="error-state"><p>Failed to load assets</p><p>${escapeHtml(e.message)}</p></div>`;
+            }
+        }
+
+        function renderAssetList() {
+            const container = document.getElementById('assetList');
+            const count = document.getElementById('assetCount');
+            if (!container || !count) return;
+            count.textContent = `${filteredCompanyAssets.length} items`;
+
+            if (filteredCompanyAssets.length === 0) {
+                container.innerHTML = '<div class="empty-state">No company assets yet.</div>';
+                return;
+            }
+
+            container.innerHTML = filteredCompanyAssets.map((asset, index) => `
+                <div class="list-item ${selectedAsset?.id === asset.id ? 'selected' : ''}" onclick="selectAssetByIndex(${index})">
+                    <div class="item-header">
+                        <span class="item-id">${escapeHtml(asset.name || '')}</span>
+                        <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">
+                            <span class="asset-badge ${asset.enabled ? escapeHtml(asset.criticality || 'medium') : 'disabled'}">${asset.enabled ? escapeHtml(asset.criticality || 'medium') : 'disabled'}</span>
+                            <span class="source-badge">${escapeHtml(asset.type || 'application')}</span>
+                        </div>
+                    </div>
+                    <div class="item-desc">${escapeHtml([asset.vendor, asset.product, asset.version].filter(Boolean).join(' / ') || 'No product metadata')}</div>
+                    <div class="item-meta">
+                        <span>Matches: ${asset.match_count || 0}</span>
+                        <span>Aliases: ${(asset.aliases || []).length}</span>
+                        <span>CPEs: ${(asset.cpe_uris || []).length}</span>
+                        <span>Packages: ${(asset.packages || []).length}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function selectAssetByIndex(index) {
+            const asset = filteredCompanyAssets[index];
+            if (asset) {
+                selectedAsset = asset;
+                renderAssetList();
+                renderAssetEditor(asset);
+            }
+        }
+
+        function renderAssetEditor(asset = null) {
+            selectedAsset = asset || null;
+            const panel = document.getElementById('assetDetailPanel');
+            if (!panel) return;
+            const active = selectedAsset || {
+                type: 'application',
+                criticality: 'medium',
+                enabled: true,
+                aliases: [],
+                cpe_uris: [],
+                packages: []
+            };
+
+            panel.innerHTML = `
+                <div class="detail-content">
+                    <div class="detail-header">
+                        <div class="detail-id">${selectedAsset ? escapeHtml(selectedAsset.name) : 'New Asset'}</div>
+                        <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;">
+                            <span class="asset-badge ${active.enabled ? escapeHtml(active.criticality || 'medium') : 'disabled'}">${active.enabled ? escapeHtml(active.criticality || 'medium') : 'disabled'}</span>
+                            ${selectedAsset ? `<span class="company-badge">${active.match_count || 0} matched CVEs</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="asset-form">
+                        <div class="form-grid">
+                            <div class="field">
+                                <label for="assetName">Name</label>
+                                <input id="assetName" value="${escapeHtml(active.name || '')}" maxlength="160">
+                            </div>
+                            <div class="field">
+                                <label for="assetType">Type</label>
+                                <select id="assetType">
+                                    <option value="application" ${active.type === 'application' ? 'selected' : ''}>Application</option>
+                                    <option value="service" ${active.type === 'service' ? 'selected' : ''}>Service</option>
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label for="assetVendor">Vendor</label>
+                                <input id="assetVendor" value="${escapeHtml(active.vendor || '')}" maxlength="120">
+                            </div>
+                            <div class="field">
+                                <label for="assetProduct">Product</label>
+                                <input id="assetProduct" value="${escapeHtml(active.product || '')}" maxlength="160">
+                            </div>
+                            <div class="field">
+                                <label for="assetVersion">Version</label>
+                                <input id="assetVersion" value="${escapeHtml(active.version || '')}" maxlength="120">
+                            </div>
+                            <div class="field">
+                                <label for="assetCriticality">Criticality</label>
+                                <select id="assetCriticality">
+                                    <option value="high" ${active.criticality === 'high' ? 'selected' : ''}>High</option>
+                                    <option value="medium" ${active.criticality === 'medium' ? 'selected' : ''}>Medium</option>
+                                    <option value="low" ${active.criticality === 'low' ? 'selected' : ''}>Low</option>
+                                </select>
+                            </div>
+                            <div class="field full">
+                                <label for="assetAliases">Aliases</label>
+                                <textarea id="assetAliases">${escapeHtml((active.aliases || []).join('\n'))}</textarea>
+                            </div>
+                            <div class="field full">
+                                <label for="assetCpes">CPE URIs</label>
+                                <textarea id="assetCpes">${escapeHtml((active.cpe_uris || []).join('\n'))}</textarea>
+                            </div>
+                            <div class="field full">
+                                <label for="assetPackages">Packages</label>
+                                <textarea id="assetPackages">${escapeHtml(formatAssetPackages(active.packages || []))}</textarea>
+                            </div>
+                            <div class="field full">
+                                <label for="assetNotes">Notes</label>
+                                <textarea id="assetNotes">${escapeHtml(active.notes || '')}</textarea>
+                            </div>
+                            <label class="field checkbox-row full" for="assetEnabled">
+                                <input type="checkbox" id="assetEnabled" ${active.enabled ? 'checked' : ''}>
+                                <span>Enabled</span>
+                            </label>
+                        </div>
+                        <div class="asset-actions">
+                            <button class="btn primary" onclick="saveCompanyAsset()">${selectedAsset ? 'Save Asset' : 'Create Asset'}</button>
+                            <button class="btn" onclick="clearAssetEditor()">Clear</button>
+                            ${selectedAsset ? '<button class="btn" onclick="deleteSelectedCompanyAsset()">Delete</button>' : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function clearAssetEditor() {
+            selectedAsset = null;
+            renderAssetList();
+            renderAssetEditor(null);
+        }
+
+        async function saveCompanyAsset() {
+            const payload = collectCompanyAssetForm();
+            if (!payload.name) {
+                setRefreshStatus('Asset name is required.', 'error');
+                return;
+            }
+
+            try {
+                const url = selectedAsset?.id
+                    ? `${API_BASE}/company-assets/${encodeURIComponent(selectedAsset.id)}`
+                    : `${API_BASE}/company-assets`;
+                const method = selectedAsset?.id ? 'PATCH' : 'POST';
+                const response = await fetchJson(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                selectedAsset = response.data;
+                setRefreshStatus(`${selectedAsset.name} saved.`, 'success');
+                await fetchCompanyAssets(document.getElementById('assetSearch')?.value || '');
+                await fetchCves(document.getElementById('cveSearch')?.value || '');
+                await fetchStats();
+            } catch (e) {
+                setRefreshStatus(`Asset save failed: ${e.message}`, 'error');
+            }
+        }
+
+        async function deleteSelectedCompanyAsset() {
+            if (!selectedAsset?.id) return;
+            if (!confirm(`Delete ${selectedAsset.name}?`)) return;
+
+            try {
+                await fetchJson(`${API_BASE}/company-assets/${encodeURIComponent(selectedAsset.id)}`, { method: 'DELETE' });
+                setRefreshStatus(`${selectedAsset.name} deleted.`, 'success');
+                selectedAsset = null;
+                await fetchCompanyAssets(document.getElementById('assetSearch')?.value || '');
+                await fetchCves(document.getElementById('cveSearch')?.value || '');
+                await fetchStats();
+                renderAssetEditor();
+            } catch (e) {
+                setRefreshStatus(`Asset delete failed: ${e.message}`, 'error');
+            }
+        }
+
+        function collectCompanyAssetForm() {
+            return {
+                name: document.getElementById('assetName')?.value || '',
+                type: document.getElementById('assetType')?.value || 'application',
+                vendor: document.getElementById('assetVendor')?.value || '',
+                product: document.getElementById('assetProduct')?.value || '',
+                version: document.getElementById('assetVersion')?.value || '',
+                criticality: document.getElementById('assetCriticality')?.value || 'medium',
+                aliases: parseTextList(document.getElementById('assetAliases')?.value || ''),
+                cpe_uris: parseTextList(document.getElementById('assetCpes')?.value || ''),
+                packages: parsePackageLines(document.getElementById('assetPackages')?.value || ''),
+                notes: document.getElementById('assetNotes')?.value || '',
+                enabled: Boolean(document.getElementById('assetEnabled')?.checked)
+            };
+        }
+
+        async function handleAssetImportCsvFile(event) {
+            const file = event.target.files?.[0];
+            assetImportCsvItems = [];
+            if (!file) {
+                updateAssetImportPreview();
+                return;
+            }
+
+            try {
+                const text = await file.text();
+                assetImportCsvItems = CtiDashboardUtils.parseCompanyAssetCsv(text);
+                updateAssetImportPreview(`${assetImportCsvItems.length} CSV row(s) loaded.`, assetImportCsvItems.length ? 'success' : '');
+            } catch (e) {
+                assetImportCsvItems = [];
+                updateAssetImportPreview(`CSV failed: ${e.message}`, 'error');
+            }
+        }
+
+        function getAssetImportItems() {
+            const text = document.getElementById('assetImportText')?.value || '';
+            const pasted = text.trim() ? CtiDashboardUtils.parseCompanyAssetCsv(text) : [];
+            return [...pasted, ...assetImportCsvItems];
+        }
+
+        function updateAssetImportPreview(message = null, type = '') {
+            const preview = document.getElementById('assetImportPreview');
+            if (!preview) return;
+
+            const items = getAssetImportItems();
+            const sample = items.slice(0, 4).map(item => item.name).join(', ');
+            preview.className = `import-preview ${type || ''}`.trim();
+            if (message) {
+                preview.textContent = message;
+            } else if (!items.length) {
+                preview.textContent = 'No assets selected.';
+            } else {
+                preview.textContent = `${items.length} asset row(s) ready${sample ? `: ${sample}${items.length > 4 ? ', ...' : ''}` : '.'}`;
+            }
+        }
+
+        async function importCompanyAssetRows() {
+            const items = getAssetImportItems();
+            if (!items.length) {
+                updateAssetImportPreview('No valid asset rows found.', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('assetImportBtn');
+            btn.disabled = true;
+            btn.textContent = 'Importing...';
+            updateAssetImportPreview(`Importing ${items.length} asset row(s)...`);
+
+            try {
+                const response = await fetchJson(`${API_BASE}/company-assets/import`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ items })
+                }, REFRESH_TIMEOUT_MS);
+                const summary = response.data?.summary || {};
+                document.getElementById('assetImportText').value = '';
+                document.getElementById('assetImportCsv').value = '';
+                assetImportCsvItems = [];
+                updateAssetImportPreview(
+                    `Imported ${summary.imported || 0}, updated ${summary.updated || 0}, failed ${summary.failed || 0}.`,
+                    summary.failed ? 'error' : 'success'
+                );
+                setRefreshStatus(`Asset import completed: ${summary.imported || 0} imported, ${summary.updated || 0} updated.`, summary.failed ? '' : 'success');
+                await fetchCompanyAssets(document.getElementById('assetSearch')?.value || '');
+                await fetchCves(document.getElementById('cveSearch')?.value || '');
+                await fetchStats();
+            } catch (e) {
+                updateAssetImportPreview(`Import failed: ${e.message}`, 'error');
+                setRefreshStatus(`Asset import failed: ${e.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Import Assets';
+            }
+        }
+
+        async function recalculateCompanyAssets() {
+            try {
+                setRefreshStatus('Recalculating company impact matches...', '');
+                const response = await fetchJson(`${API_BASE}/company-assets/recalculate`, { method: 'POST' }, REFRESH_TIMEOUT_MS);
+                const result = response.data || {};
+                setRefreshStatus(`Company impact recalculated: ${result.matches || 0} matches across ${result.cves || 0} CVEs.`, 'success');
+                await fetchCompanyAssets(document.getElementById('assetSearch')?.value || '');
+                await fetchCves(document.getElementById('cveSearch')?.value || '');
+                await fetchStats();
+            } catch (e) {
+                setRefreshStatus(`Recalculation failed: ${e.message}`, 'error');
+            }
+        }
+
+        function updateAssetFilterOptions() {
+            const select = document.getElementById('cveAssetFilter');
+            if (!select) return;
+            const enabledAssets = companyAssets.filter(asset => asset.enabled);
+            const hasSelected = selectedCompanyAssetId === 'all' || enabledAssets.some(asset => String(asset.id) === String(selectedCompanyAssetId));
+            if (!hasSelected) selectedCompanyAssetId = 'all';
+            select.innerHTML = [
+                '<option value="all">All Assets</option>',
+                ...enabledAssets.map(asset => `<option value="${asset.id}" ${String(asset.id) === String(selectedCompanyAssetId) ? 'selected' : ''}>${escapeHtml(asset.name)}</option>`)
+            ].join('');
+        }
+
+        function filterCompanyAffected() {
+            selectedCompanyAffected = !selectedCompanyAffected;
+            updateCompanyFilterControls();
+            fetchCves(document.getElementById('cveSearch')?.value || '');
+        }
+
+        function filterCveAsset(assetId) {
+            selectedCompanyAssetId = assetId || 'all';
+            if (selectedCompanyAssetId !== 'all') selectedCompanyAffected = true;
+            updateCompanyFilterControls();
+            fetchCves(document.getElementById('cveSearch')?.value || '');
+        }
+
+        function updateCompanyFilterControls() {
+            document.getElementById('companyAffectedBtn')?.classList.toggle('active', selectedCompanyAffected);
+            const select = document.getElementById('cveAssetFilter');
+            if (select) select.value = selectedCompanyAssetId;
+        }
+
+        function formatAssetPackages(packages) {
+            return (packages || []).map(pkg => pkg.ecosystem ? `${pkg.ecosystem}:${pkg.name}` : pkg.name).filter(Boolean).join('\n');
+        }
+
+        function parseTextList(text) {
+            return String(text || '')
+                .split(/[\n;|,]+/)
+                .map(value => value.trim())
+                .filter(Boolean);
+        }
+
+        function parsePackageLines(text) {
+            return parseTextList(text).map(value => {
+                const separator = value.indexOf(':');
+                if (separator > 0) {
+                    return {
+                        ecosystem: value.slice(0, separator).trim(),
+                        name: value.slice(separator + 1).trim()
+                    };
+                }
+                return { name: value };
+            }).filter(pkg => pkg.name);
         }
 
         async function fetchFeedStatus() {
@@ -688,16 +1113,22 @@ let allCves = [];
         function switchMainTab(tab, button) {
             activeTab = tab;
             document.querySelectorAll('.main-tab').forEach(t => t.classList.remove('active'));
-            button?.classList.add('active');
+            const activeButton = button || document.querySelector(`.main-tab[data-tab="${tab}"]`);
+            activeButton?.classList.add('active');
 
             document.getElementById('cvesPanel').style.display = tab === 'cves' ? 'grid' : 'none';
             document.getElementById('iocsPanel').style.display = tab === 'iocs' ? 'grid' : 'none';
             document.getElementById('progressPanel').style.display = tab === 'progress' ? 'grid' : 'none';
+            document.getElementById('assetsPanel').style.display = tab === 'assets' ? 'grid' : 'none';
             document.getElementById('feedsPanel').style.display = tab === 'feeds' ? 'block' : 'none';
 
             if (tab === 'cves' && allCves.length === 0) fetchCves();
             if (tab === 'iocs' && allIocs.length === 0) fetchIocs();
             if (tab === 'progress') fetchProgress(document.getElementById('progressSearch')?.value || '');
+            if (tab === 'assets') {
+                fetchCompanyAssets(document.getElementById('assetSearch')?.value || '');
+                renderAssetEditor(selectedAsset);
+            }
             if (tab === 'feeds') fetchFeedStatus();
         }
 
@@ -772,6 +1203,13 @@ let allCves = [];
             }, 300);
         }
 
+        function debounceSearchAssets() {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                fetchCompanyAssets(document.getElementById('assetSearch')?.value || '');
+            }, 300);
+        }
+
         function debounceGlobalSearch() {
             clearTimeout(searchTimeout);
             searchTimeout = setTimeout(() => {
@@ -812,6 +1250,7 @@ let allCves = [];
                 if (activeTab === 'cves') fetchCves(document.getElementById('cveSearch')?.value || '');
                 if (activeTab === 'iocs') fetchIocs(selectedIocType, document.getElementById('iocSearch')?.value || '');
                 if (activeTab === 'progress') fetchProgress(document.getElementById('progressSearch')?.value || '');
+                if (activeTab === 'assets') fetchCompanyAssets(document.getElementById('assetSearch')?.value || '');
                 if (activeTab === 'feeds') fetchFeedStatus();
             }
         }
@@ -843,14 +1282,25 @@ let allCves = [];
         }
 
         function exportData() {
-            const activeTab = document.querySelector('.main-tab.active')?.textContent;
-            if (activeTab?.includes('Progress')) {
+            if (activeTab === 'progress') {
                 exportCsv(filteredProgressItems, 'cve-progress-export', ['id', 'progress_status', 'severity', 'cvss_score', 'latest_note', 'progress_updated_at']);
-            } else if (activeTab?.includes('CVE')) {
-                exportCsv(filteredCves, 'cve-export', ['id', 'source', 'severity', 'cvss_score', 'description', 'published_at']);
-            } else if (activeTab?.includes('IOC')) {
+            } else if (activeTab === 'assets') {
+                exportCsv(companyAssetCsvRows(filteredCompanyAssets), 'company-assets-export', ['name', 'type', 'vendor', 'product', 'version', 'aliases', 'cpe_uris', 'packages', 'criticality', 'enabled', 'notes']);
+            } else if (activeTab === 'iocs') {
                 exportCsv(filteredIocs, 'ioc-export', ['type', 'value', 'source', 'threat_type', 'confidence', 'first_seen', 'last_seen']);
+            } else {
+                exportCsv(filteredCves, 'cve-export', ['id', 'source', 'severity', 'cvss_score', 'description', 'published_at', 'company_match_count', 'company_priority_score']);
             }
+        }
+
+        function companyAssetCsvRows(assets) {
+            return (assets || []).map(asset => ({
+                ...asset,
+                aliases: (asset.aliases || []).join('; '),
+                cpe_uris: (asset.cpe_uris || []).join('; '),
+                packages: formatAssetPackages(asset.packages || []).replace(/\n/g, '; '),
+                enabled: asset.enabled ? 'true' : 'false'
+            }));
         }
 
         function exportCsv(data, filename, fields) {
@@ -980,7 +1430,7 @@ let allCves = [];
             if (!result) return;
 
             if (result.type === 'cve') {
-                switchMainTab('cves', document.querySelector('.main-tab[onclick*="cves"]'));
+                switchMainTab('cves', document.querySelector('.main-tab[data-tab="cves"]'));
                 document.getElementById('cveSearch').value = result.title || result.id || '';
                 await fetchCves(result.title || result.id || '');
                 const cve = filteredCves.find(item => item.id === result.entity_id || item.id === result.id) || { id: result.entity_id || result.id };
@@ -989,7 +1439,7 @@ let allCves = [];
             }
 
             if (result.type === 'ioc') {
-                switchMainTab('iocs', document.querySelector('.main-tab[onclick*="iocs"]'));
+                switchMainTab('iocs', document.querySelector('.main-tab[data-tab="iocs"]'));
                 document.getElementById('iocSearch').value = result.title || '';
                 await fetchIocs('all', result.title || '');
                 const ioc = filteredIocs.find(item => String(item.id) === String(result.entity_id)) || await fetchIocById(result.entity_id);
@@ -1132,6 +1582,7 @@ let allCves = [];
         }
 
         fetchStats();
+        fetchCompanyAssets();
         fetchCves();
 
         setInterval(() => {

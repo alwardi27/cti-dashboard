@@ -41,6 +41,7 @@ export async function fetchNvdCves(daysBack = 7, apiKey = process.env.NVD_API_KE
             }
 
             const description = cve.descriptions?.find(d => d.lang === 'en')?.value || 'No description';
+            const vulnerableCpes = extractNvdVulnerableCpes(cve.configurations || v.configurations || []);
 
             insertOrUpdateCve({
                 id: cve.id,
@@ -49,7 +50,9 @@ export async function fetchNvdCves(daysBack = 7, apiKey = process.env.NVD_API_KE
                 cvss_score: cvssScore,
                 cvss_vector: cvssVector,
                 severity: getSeverity(cvssScore),
-                published_at: cve.published
+                published_at: cve.published,
+                search_text: vulnerableCpes.join(' '),
+                search_metadata: { vulnerable_cpes: vulnerableCpes }
             });
             count++;
         }
@@ -91,6 +94,7 @@ export async function fetchNvdById(cveId, apiKey = process.env.NVD_API_KEY || nu
         }
 
         const description = cve.descriptions?.find(d => d.lang === 'en')?.value || 'No description';
+        const vulnerableCpes = extractNvdVulnerableCpes(cve.configurations || v.configurations || []);
 
         return {
             id: cve.id,
@@ -103,8 +107,10 @@ export async function fetchNvdById(cveId, apiKey = process.env.NVD_API_KEY || nu
             severity: getSeverity(cvssScore),
             published_at: cve.published,
             references: cve.references?.slice(0, 10) || [],
-            configurations: cve.configurations || [],
-            weaknesses: cve.weaknesses || []
+            configurations: cve.configurations || v.configurations || [],
+            weaknesses: cve.weaknesses || [],
+            search_text: vulnerableCpes.join(' '),
+            search_metadata: { vulnerable_cpes: vulnerableCpes }
         };
     } catch (error) {
         console.error(`[NVD] Error fetching ${cveId}:`, error.message);
@@ -114,6 +120,31 @@ export async function fetchNvdById(cveId, apiKey = process.env.NVD_API_KEY || nu
 
 function toNvdDate(date) {
     return date.toISOString();
+}
+
+export function extractNvdVulnerableCpes(configurations = []) {
+    const cpes = new Set();
+
+    function walk(node) {
+        if (!node || typeof node !== 'object') return;
+        if (Array.isArray(node)) {
+            node.forEach(walk);
+            return;
+        }
+
+        for (const match of node.cpeMatch || node.cpe_match || []) {
+            if (match?.vulnerable === false) continue;
+            const criteria = match?.criteria || match?.cpe23Uri || match?.cpe_name;
+            if (criteria && /^cpe:/i.test(criteria)) cpes.add(String(criteria).trim());
+        }
+
+        for (const child of node.nodes || node.children || []) {
+            walk(child);
+        }
+    }
+
+    walk(configurations);
+    return [...cpes].slice(0, 100);
 }
 
 export default { fetchNvdCves, fetchNvdById };

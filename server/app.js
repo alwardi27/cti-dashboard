@@ -6,6 +6,7 @@ import { getFeedConfig } from './config/env.js';
 import { initializeDb } from './db/database.js';
 import { startScheduler, stopScheduler, fetchAllFeeds } from './workers/scheduler.js';
 import cvesRouter from './routes/cves.js';
+import companyAssetsRouter from './routes/companyAssets.js';
 import iocsRouter from './routes/iocs.js';
 import searchRouter from './routes/search.js';
 import createStatsRouter from './routes/stats.js';
@@ -21,6 +22,7 @@ export function createApp(options = {}) {
     app.use(express.static(join(__dirname, '../public')));
 
     app.use('/api/cves', cvesRouter);
+    app.use('/api/company-assets', companyAssetsRouter);
     app.use('/api/iocs', iocsRouter);
     app.use('/api/search', searchRouter);
     app.use('/api/stats', createStatsRouter({

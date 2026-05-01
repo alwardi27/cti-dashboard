@@ -25,6 +25,16 @@
             .filter(item => item.id);
     }
 
+    function parseCompanyAssetCsv(text) {
+        const rows = parseCsvRows(text);
+        if (rows.length < 2) return [];
+
+        const headers = rows[0].map(normalizeHeader);
+        return rows.slice(1)
+            .map(row => rowToCompanyAsset(headers, row))
+            .filter(item => item.name);
+    }
+
     function parseCsvRows(text) {
         const rows = [];
         let row = [];
@@ -78,6 +88,22 @@
         return item;
     }
 
+    function rowToCompanyAsset(headers, row) {
+        const item = {};
+        headers.forEach((header, index) => {
+            const value = row[index];
+            if (!header || value === undefined || value === '') return;
+            if (['name', 'type', 'vendor', 'product', 'version', 'aliases', 'criticality', 'enabled', 'notes'].includes(header)) {
+                item[header] = value;
+            }
+            if (['cpe', 'cpes', 'cpe_uri', 'cpe_uris'].includes(header)) item.cpe_uris = value;
+            if (['packages', 'package', 'package_name'].includes(header)) item.packages = value;
+            if (['package_ecosystem', 'ecosystem'].includes(header)) item.package_ecosystem = value;
+            if (['package_version_range', 'vulnerable_version_range'].includes(header)) item.package_version_range = value;
+        });
+        return item;
+    }
+
     function normalizeHeader(value) {
         return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
     }
@@ -86,7 +112,8 @@
         escapeCsvCell,
         buildCsv,
         parseProgressImportText,
-        parseProgressImportCsv
+        parseProgressImportCsv,
+        parseCompanyAssetCsv
     };
 })(globalThis);
 

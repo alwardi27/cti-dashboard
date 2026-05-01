@@ -352,6 +352,7 @@ h1 {
 .stat-card.critical::before { background: var(--severity-critical); }
 .stat-card.high::before { background: var(--severity-high); }
 .stat-card.ioc::before { background: var(--accent-secondary); }
+.stat-card.company::before { background: var(--accent-gold); }
 
 .stat-label {
     margin-bottom: 8px;
@@ -654,6 +655,25 @@ h1 {
     color: #ffffff;
 }
 
+.filter-select {
+    min-height: 29px;
+    max-width: 230px;
+    padding: 5px 30px 5px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    background: #ffffff;
+    color: var(--text-muted);
+    font-family: 'Fira Code', monospace;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.filter-select:focus {
+    outline: none;
+    border-color: rgba(0, 107, 74, 0.72);
+    box-shadow: 0 0 0 3px rgba(0, 107, 74, 0.12);
+}
+
 .count-label {
     margin-left: auto;
     color: var(--text-muted);
@@ -754,6 +774,8 @@ h1 {
 .ioc-badge,
 .source-badge,
 .progress-badge,
+.company-badge,
+.asset-badge,
 .tag {
     display: inline-flex;
     align-items: center;
@@ -767,7 +789,9 @@ h1 {
 
 .severity-badge,
 .ioc-badge,
-.progress-badge {
+.progress-badge,
+.company-badge,
+.asset-badge {
     padding: 2px 7px;
 }
 
@@ -903,6 +927,118 @@ h1 {
 .progress-badge.closed { background: rgba(29, 127, 84, 0.12); color: var(--progress-closed); border: 1px solid rgba(29, 127, 84, 0.28); }
 .progress-badge.needs-review { background: rgba(185, 121, 24, 0.13); color: var(--severity-high); border: 1px solid rgba(185, 121, 24, 0.3); }
 .progress-badge.untagged { background: rgba(101, 117, 108, 0.1); color: var(--text-muted); border: 1px solid rgba(101, 117, 108, 0.22); }
+
+.company-badge {
+    background: rgba(198, 162, 74, 0.18);
+    color: #806314;
+    border: 1px solid rgba(198, 162, 74, 0.38);
+}
+
+.asset-badge.high { background: rgba(179, 38, 53, 0.1); color: var(--severity-critical); border: 1px solid rgba(179, 38, 53, 0.25); }
+.asset-badge.medium { background: rgba(198, 162, 74, 0.16); color: #806314; border: 1px solid rgba(198, 162, 74, 0.32); }
+.asset-badge.low { background: rgba(29, 127, 84, 0.12); color: var(--severity-low); border: 1px solid rgba(29, 127, 84, 0.28); }
+.asset-badge.disabled { background: rgba(101, 117, 108, 0.1); color: var(--text-muted); border: 1px solid rgba(101, 117, 108, 0.22); }
+
+.asset-form {
+    display: grid;
+    gap: 12px;
+}
+
+.form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.field.full {
+    grid-column: 1 / -1;
+}
+
+.field label {
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.field input,
+.field select,
+.field textarea {
+    width: 100%;
+    min-height: 36px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    background: var(--bg-panel);
+    color: var(--text-primary);
+    font-size: 12px;
+}
+
+.field textarea {
+    min-height: 76px;
+    resize: vertical;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+    outline: none;
+    border-color: rgba(0, 107, 74, 0.72);
+    box-shadow: 0 0 0 3px rgba(0, 107, 74, 0.12);
+    background: #ffffff;
+}
+
+.checkbox-row {
+    flex-direction: row;
+    align-items: center;
+}
+
+.checkbox-row input {
+    width: 16px;
+    min-height: 16px;
+}
+
+.asset-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.asset-match-list {
+    display: grid;
+    gap: 8px;
+}
+
+.asset-match-item {
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-panel);
+}
+
+.asset-match-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 5px;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.asset-match-reason {
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.45;
+}
 
 .progress-tag-btn {
     padding: 6px 10px;
@@ -1073,7 +1209,7 @@ h1 {
 
     .main-tabs {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(5, minmax(0, 1fr));
     }
 
     .sidebar-status {
@@ -1105,7 +1241,8 @@ h1 {
     .main-tabs,
     .stats-grid,
     .refresh-summary,
-    .triage-overview {
+    .triage-overview,
+    .form-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
@@ -1141,7 +1278,8 @@ h1 {
     .stats-grid,
     .refresh-summary,
     .triage-overview,
-    .metrics-grid {
+    .metrics-grid,
+    .form-grid {
         grid-template-columns: 1fr;
     }
 

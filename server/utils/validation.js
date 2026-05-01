@@ -57,6 +57,8 @@ export function parseCveFilters(query = {}) {
         fromDate: parseIsoDate(query.fromDate, 'fromDate'),
         progressStatus: parseProgressStatus(query.progressStatus, { optional: true, allowNone: true }),
         needsReview: parseBooleanFlag(query.needsReview, 'needsReview'),
+        companyAffected: parseBooleanFlag(query.companyAffected, 'companyAffected'),
+        assetId: parseInteger(query.assetId, 'assetId', { min: 1, max: 100000, optional: true }),
         sort: parseEnum(query.sort, SORTS, 'sort', { optional: true }) || null,
         ...parsePaging(query)
     };

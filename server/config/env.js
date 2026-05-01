@@ -61,12 +61,16 @@ export function getWhatsAppConfig(overrides = {}) {
 export function getTeamsConfig(overrides = {}) {
     return {
         enabled: booleanFrom(valueFrom(overrides.enabled, 'TEAMS_ALERTS_ENABLED')),
-        webhookUrl: valueFrom(overrides.webhookUrl, 'TEAMS_WEBHOOK_URL')
+        webhookUrl: valueFrom(overrides.webhookUrl, 'TEAMS_WEBHOOK_URL'),
+        format: valueFrom(overrides.format, 'TEAMS_WEBHOOK_FORMAT') || 'adaptive_card',
+        timeoutMs: numberFrom(valueFrom(overrides.timeoutMs, 'TEAMS_WEBHOOK_TIMEOUT_MS'), 15000, { min: 1000 }),
+        maxAttempts: numberFrom(valueFrom(overrides.maxAttempts, 'TEAMS_WEBHOOK_MAX_ATTEMPTS'), 2, { min: 1, max: 5 }),
+        retryDelayMs: numberFrom(valueFrom(overrides.retryDelayMs, 'TEAMS_WEBHOOK_RETRY_DELAY_MS'), 500, { min: 0 })
     };
 }
 
 function valueFrom(override, ...envNames) {
-    if (override) return override;
+    if (override !== undefined && override !== null && override !== '') return override;
     for (const envName of envNames) {
         if (process.env[envName]) return process.env[envName];
     }
@@ -75,6 +79,15 @@ function valueFrom(override, ...envNames) {
 
 function booleanFrom(value) {
     return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
+function numberFrom(value, fallback, options = {}) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+
+    const min = options.min ?? Number.NEGATIVE_INFINITY;
+    const max = options.max ?? Number.POSITIVE_INFINITY;
+    return Math.min(max, Math.max(min, parsed));
 }
 
 loadEnvFile();

@@ -9,11 +9,14 @@ import { parseCveFilters, parseSearchFilters, validateRefreshOverrides } from '.
 import { buildRefreshSummary, runWithRefreshLock } from '../server/workers/scheduler.js';
 import { meetsSeverityThreshold } from '../server/services/alerts.js';
 import { importCveProgressItems, normalizeImportItem } from '../server/services/cveImport.js';
+import { matchAssetToCve, normalizeCompanyAssetInput, parseCompanyAssetCsv } from '../server/services/companyAssets.js';
 import { parseMalwareBazaarRecentResponse, queryMalwareBazaarByHash } from '../server/services/malwareBazaar.js';
-import { buildTeamsPayload, notifyTeamsProgress } from '../server/services/teams.js';
+import { buildTeamsPayload, buildTeamsTextPayload, notifyTeamsProgress } from '../server/services/teams.js';
 import { parseFeodoCsv } from '../server/services/feodo.js';
 import { parseSslblCertCsv, parseSslblIpCsv } from '../server/services/sslbl.js';
 import { parseEpssResponse } from '../server/services/epss.js';
+import { extractNvdVulnerableCpes } from '../server/services/nvd.js';
+import { collectGithubPackages } from '../server/services/githubAdvisories.js';
 import { parseOsvModifiedCsv, parseOsvRecord } from '../server/services/osv.js';
 import {
     fetchAbuseIpdbBlacklist,
@@ -104,6 +107,110 @@ test('progress import validation accepts flexible fields and rejects bad rows', 
     assert.equal(normalizeImportItem({ id: 'not-a-cve' }, 1).valid, false);
     assert.match(normalizeImportItem({ id: 'CVE-2026-1234', status: 'todo' }, 2).error, /status must be one of/);
     assert.match(normalizeImportItem({ id: 'CVE-2026-1234', cvss_score: '11' }, 3).error, /cvss_score/);
+});
+
+test('company asset validation and CSV import normalize inventory rows', () => {
+    const asset = normalizeCompanyAssetInput({
+        name: 'Exchange Online',
+        type: 'service',
+        vendor: 'Microsoft',
+        product: 'Exchange Server',
+        version: '2019',
+        aliases: 'OWA; Outlook Web Access',
+        cpe_uris: 'cpe:2.3:a:microsoft:exchange_server:*:*:*:*:*:*:*:*',
+        packages: 'npm:@microsoft/mgt',
+        criticality: 'high',
+        enabled: 'yes'
+    });
+
+    assert.equal(asset.type, 'service');
+    assert.equal(asset.enabled, true);
+    assert.deepEqual(asset.aliases, ['OWA', 'Outlook Web Access']);
+    assert.equal(asset.cpe_uris[0], 'cpe:2.3:a:microsoft:exchange_server:*:*:*:*:*:*:*:*');
+    assert.deepEqual(asset.packages, [{ name: '@microsoft/mgt', ecosystem: 'npm', vulnerable_version_range: null }]);
+
+    assert.deepEqual(parseCompanyAssetCsv(`name,type,vendor,product,criticality,enabled\n"Fortinet VPN",service,Fortinet,FortiOS,high,true\n`), [{
+        index: 0,
+        name: 'Fortinet VPN',
+        type: 'service',
+        vendor: 'Fortinet',
+        product: 'FortiOS',
+        criticality: 'high',
+        enabled: 'true'
+    }]);
+    assert.throws(() => normalizeCompanyAssetInput({ name: 'Bad', type: 'device' }), /type must be one of/);
+});
+
+test('company asset matcher ranks CPE and package matches ahead of text matches', () => {
+    const cve = {
+        id: 'CVE-2026-8888',
+        description: 'Remote code execution in Microsoft Exchange Server OWA components',
+        cvss_score: 9.8,
+        severity: 'critical'
+    };
+    const exchange = normalizeCompanyAssetInput({
+        name: 'Exchange',
+        vendor: 'Microsoft',
+        product: 'Exchange Server',
+        criticality: 'high',
+        cpe_uris: 'cpe:2.3:a:microsoft:exchange_server:*:*:*:*:*:*:*:*'
+    });
+    const nginx = normalizeCompanyAssetInput({
+        name: 'Nginx',
+        vendor: 'F5',
+        product: 'NGINX',
+        criticality: 'medium'
+    });
+
+    const cpeMatch = matchAssetToCve(exchange, cve, {
+        vulnerable_cpes: ['cpe:2.3:a:microsoft:exchange_server:*:*:*:*:*:*:*:*']
+    });
+    const textMatch = matchAssetToCve(exchange, cve, {});
+    const noMatch = matchAssetToCve(nginx, cve, {});
+
+    assert.equal(cpeMatch.match_type, 'cpe_exact');
+    assert.equal(cpeMatch.score > textMatch.score, true);
+    assert.equal(textMatch.match_type, 'vendor_product');
+    assert.equal(noMatch, null);
+});
+
+test('company asset matcher supports optional versions and guards generic keywords', () => {
+    const asset = normalizeCompanyAssetInput({
+        name: 'Django Portal',
+        product: 'Django',
+        packages: [{ ecosystem: 'PyPI', name: 'django' }],
+        version: '4.2',
+        aliases: 'app; portal'
+    });
+    const matched = matchAssetToCve(asset, {
+        id: 'CVE-2026-7777',
+        description: 'Django SQL injection in contrib admin',
+        severity: 'high'
+    }, {
+        packages: [{ ecosystem: 'PyPI', name: 'django', vulnerable_version_range: '<4.2.8' }]
+    });
+
+    assert.equal(matched.match_type, 'package_exact');
+    assert.equal(matched.confidence >= 0.9, true);
+
+    const genericOnly = normalizeCompanyAssetInput({ name: 'Internal App', product: 'App', aliases: 'api; web' });
+    assert.equal(matchAssetToCve(genericOnly, { id: 'CVE-2026-1', description: 'An API web service fails' }, {}), null);
+});
+
+test('feed metadata extractors expose NVD CPEs and GitHub packages', () => {
+    assert.deepEqual(extractNvdVulnerableCpes([{
+        nodes: [{
+            cpeMatch: [
+                { vulnerable: true, criteria: 'cpe:2.3:a:microsoft:exchange_server:2019:*:*:*:*:*:*:*' },
+                { vulnerable: false, criteria: 'cpe:2.3:a:ignored:product:*:*:*:*:*:*:*:*' }
+            ]
+        }]
+    }]), ['cpe:2.3:a:microsoft:exchange_server:2019:*:*:*:*:*:*:*']);
+
+    assert.deepEqual(collectGithubPackages([{
+        package: { ecosystem: 'npm', name: 'lodash' },
+        vulnerableVersionRange: '<4.17.21'
+    }]), [{ name: 'lodash', ecosystem: 'npm', vulnerable_version_range: '<4.17.21' }]);
 });
 
 test('MalwareBazaar parser handles ok and no_results responses', () => {
@@ -653,8 +760,14 @@ test('Teams progress notifications build adaptive cards and report webhook failu
     });
     assert.equal(payload.type, 'message');
     assert.equal(payload.attachments[0].contentType, 'application/vnd.microsoft.card.adaptive');
+    assert.match(buildTeamsTextPayload('note_added', {
+        cve: { id: 'CVE-2026-1234', progress_status: 'open' },
+        note: 'Needs review'
+    }).text, /CVE-2026-1234/);
 
+    let attempts = 0;
     axios.post = async (url, body, options) => {
+        attempts++;
         assert.equal(url, 'https://example.com/teams');
         assert.equal(body.type, 'message');
         assert.equal(options.headers['Content-Type'], 'application/json');
@@ -664,8 +777,29 @@ test('Teams progress notifications build adaptive cards and report webhook failu
         cve: { id: 'CVE-2026-1234', progress_status: 'open', severity: 'high', cvss_score: 8.5 }
     }, {
         enabled: true,
-        webhookUrl: 'https://example.com/teams'
-    }), { attempted: true, sent: true });
+        webhookUrl: 'https://example.com/teams',
+        retryDelayMs: 0
+    }), { attempted: true, sent: true, attempts: 1, format: 'adaptive_card' });
+    assert.equal(attempts, 1);
+
+    attempts = 0;
+    axios.post = async () => {
+        attempts++;
+        if (attempts === 1) {
+            const error = new Error('rate limited');
+            error.response = { status: 429, headers: { 'retry-after': '0' } };
+            throw error;
+        }
+        return { status: 200 };
+    };
+    assert.deepEqual(await notifyTeamsProgress('status_changed', {
+        cve: { id: 'CVE-2026-1234', progress_status: 'assigned' }
+    }, {
+        enabled: true,
+        webhookUrl: 'https://example.com/teams',
+        maxAttempts: 2,
+        retryDelayMs: 0
+    }), { attempted: true, sent: true, attempts: 2, format: 'adaptive_card' });
 
     axios.post = async () => {
         throw new Error('webhook unavailable');
@@ -675,10 +809,13 @@ test('Teams progress notifications build adaptive cards and report webhook failu
         note: 'Needs review'
     }, {
         enabled: true,
-        webhookUrl: 'https://example.com/teams'
+        webhookUrl: 'https://example.com/teams',
+        format: 'text',
+        maxAttempts: 1
     });
     assert.equal(failed.attempted, true);
     assert.equal(failed.sent, false);
+    assert.equal(failed.format, 'text');
     assert.match(failed.error, /webhook unavailable/);
 });
 
@@ -703,5 +840,9 @@ test('CSV utilities escape quotes and empty values', () => {
     assert.deepEqual(
         JSON.parse(JSON.stringify(context.CtiDashboardUtils.parseProgressImportCsv('cve_id,status,note,cvss\n"CVE-2026-1002",assigned,"quoted, note",7.1\n'))),
         [{ id: 'CVE-2026-1002', status: 'assigned', note: 'quoted, note', cvss_score: '7.1' }]
+    );
+    assert.deepEqual(
+        JSON.parse(JSON.stringify(context.CtiDashboardUtils.parseCompanyAssetCsv('name,type,vendor,product,packages\nDjango,application,DSF,Django,PyPI:django\n'))),
+        [{ name: 'Django', type: 'application', vendor: 'DSF', product: 'Django', packages: 'PyPI:django' }]
     );
 });
