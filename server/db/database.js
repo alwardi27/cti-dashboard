@@ -20,7 +20,8 @@ const CVE_SOURCE_PRIORITIES = {
     virustotal: 50,
     greynoise: 45,
     otx: 40,
-    osv: 75
+    osv: 75,
+    manual: 10
 };
 const KNOWN_FEED_SOURCES = [
     'nvd',
@@ -99,13 +100,13 @@ export async function initializeDb() {
 function migrateSchema() {
     ensureSchemaMigrationTable();
     const cvesSchema = getTableSql('cves');
-    const hasExpandedCveSources = cvesSchema && cvesSchema.includes('vulncheck') && cvesSchema.includes('greynoise') && cvesSchema.includes('otx') && cvesSchema.includes('osv');
+    const hasExpandedCveSources = cvesSchema && cvesSchema.includes('vulncheck') && cvesSchema.includes('greynoise') && cvesSchema.includes('otx') && cvesSchema.includes('osv') && cvesSchema.includes('manual');
 
     if (!hasExpandedCveSources) {
         db.run(`
             CREATE TABLE cves_new (
                 id TEXT PRIMARY KEY,
-                source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv')),
+                source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv', 'manual')),
                 description TEXT,
                 cvss_score REAL,
                 cvss_vector TEXT,
@@ -133,7 +134,7 @@ function migrateSchema() {
     db.run(`
         CREATE TABLE IF NOT EXISTS cve_sources (
             cve_id TEXT NOT NULL,
-            source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv')),
+            source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv', 'manual')),
             first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
             last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (cve_id, source),
@@ -201,12 +202,12 @@ function markSchemaVersion(version) {
 
 function migrateCveSourcesSchema() {
     const cveSourcesSchema = getTableSql('cve_sources');
-    if (!cveSourcesSchema || cveSourcesSchema.includes('osv')) return;
+    if (!cveSourcesSchema || cveSourcesSchema.includes('manual')) return;
 
     db.run(`
         CREATE TABLE cve_sources_new (
             cve_id TEXT NOT NULL,
-            source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv')),
+            source TEXT NOT NULL CHECK(source IN ('nvd', 'github', 'cisa_kev', 'vulncheck', 'shodan', 'censys', 'virustotal', 'greynoise', 'otx', 'osv', 'manual')),
             first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
             last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (cve_id, source),

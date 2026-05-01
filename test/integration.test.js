@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
+import axios from 'axios';
 
 test('health, stats, and CVE list endpoints run against a temp DB', async (t) => {
     const { baseUrl, insertOrUpdateCve } = await startTestServer(t);
@@ -108,6 +109,166 @@ test('manual refresh endpoint rejects overlapping refreshes with 409', async (t)
         error: 'Refresh already running'
     });
     assert.equal(firstResponse.status, 200);
+});
+
+test('progress import endpoint imports existing CVEs into the progress tab', async (t) => {
+    const { baseUrl, insertOrUpdateCve } = await startTestServer(t);
+    insertOrUpdateCve({
+        id: 'CVE-2026-2001',
+        source: 'nvd',
+        description: 'Existing import target',
+        cvss_score: 8.2,
+        severity: 'high',
+        published_at: '2026-04-30T00:00:00Z'
+    });
+
+    const imported = await fetchJson(`${baseUrl}/api/cves/progress/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            items: [{ id: 'CVE-2026-2001', note: 'Imported existing CVE' }]
+        })
+    });
+
+    assert.equal(imported.data.summary.imported, 1);
+    assert.equal(imported.data.summary.failed, 0);
+
+    const progress = await fetchJson(`${baseUrl}/api/cves/progress?search=CVE-2026-2001`);
+    assert.equal(progress.data.length, 1);
+    assert.equal(progress.data[0].id, 'CVE-2026-2001');
+    assert.equal(progress.data[0].progress_status, 'open');
+    assert.equal(progress.data[0].latest_note, 'Imported existing CVE');
+});
+
+test('progress import endpoint resolves missing CVEs from NVD and creates placeholders when unresolved', async (t) => {
+    const originalRequest = axios.request;
+    t.after(() => {
+        axios.request = originalRequest;
+    });
+
+    axios.request = async (options = {}) => {
+        if (options.params?.cveId === 'CVE-2026-2002') {
+            return {
+                data: {
+                    vulnerabilities: [{
+                        cve: {
+                            id: 'CVE-2026-2002',
+                            published: '2026-04-30T00:00:00Z',
+                            descriptions: [{ lang: 'en', value: 'Resolved by mocked NVD' }],
+                            metrics: {
+                                cvssMetricV31: [{
+                                    cvssData: {
+                                        baseScore: 9.1,
+                                        vectorString: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H'
+                                    }
+                                }]
+                            }
+                        }
+                    }]
+                }
+            };
+        }
+        if (options.params?.cveId === 'CVE-2026-2003') {
+            return { data: { vulnerabilities: [] } };
+        }
+        throw new Error(`Unexpected NVD request ${options.params?.cveId}`);
+    };
+
+    const { baseUrl } = await startTestServer(t);
+    const imported = await fetchJson(`${baseUrl}/api/cves/progress/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            items: [
+                { id: 'CVE-2026-2002' },
+                { id: 'CVE-2026-2003', description: 'Manual unresolved CVE', severity: 'medium' }
+            ]
+        })
+    });
+
+    assert.equal(imported.data.summary.imported, 2);
+    assert.equal(imported.data.summary.placeholders, 1);
+
+    const resolved = await fetchJson(`${baseUrl}/api/cves/CVE-2026-2002/progress`);
+    assert.equal(resolved.data.source, 'nvd');
+    assert.equal(resolved.data.progress_status, 'open');
+    assert.equal(resolved.data.description, 'Resolved by mocked NVD');
+
+    const placeholder = await fetchJson(`${baseUrl}/api/cves/CVE-2026-2003/progress`);
+    assert.equal(placeholder.data.source, 'manual');
+    assert.equal(placeholder.data.progress_status, 'open');
+    assert.equal(placeholder.data.description, 'Manual unresolved CVE');
+});
+
+test('progress Teams notifications are best-effort for imports, status changes, and notes', async (t) => {
+    const previousEnabled = process.env.TEAMS_ALERTS_ENABLED;
+    const previousUrl = process.env.TEAMS_WEBHOOK_URL;
+    const originalPost = axios.post;
+    process.env.TEAMS_ALERTS_ENABLED = 'true';
+    process.env.TEAMS_WEBHOOK_URL = 'https://example.com/teams';
+    const posts = [];
+
+    t.after(() => {
+        axios.post = originalPost;
+        if (previousEnabled === undefined) {
+            delete process.env.TEAMS_ALERTS_ENABLED;
+        } else {
+            process.env.TEAMS_ALERTS_ENABLED = previousEnabled;
+        }
+        if (previousUrl === undefined) {
+            delete process.env.TEAMS_WEBHOOK_URL;
+        } else {
+            process.env.TEAMS_WEBHOOK_URL = previousUrl;
+        }
+    });
+
+    axios.post = async (url, body) => {
+        posts.push({ url, body });
+        return { status: 200 };
+    };
+
+    const { baseUrl, insertOrUpdateCve } = await startTestServer(t);
+    insertOrUpdateCve({
+        id: 'CVE-2026-2004',
+        source: 'nvd',
+        description: 'Teams integration target',
+        cvss_score: 7.7,
+        severity: 'high',
+        published_at: '2026-04-30T00:00:00Z'
+    });
+
+    const imported = await fetchJson(`${baseUrl}/api/cves/progress/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: [{ id: 'CVE-2026-2004' }] })
+    });
+    assert.deepEqual(imported.notifications.teams, { attempted: true, sent: true });
+
+    await fetchJson(`${baseUrl}/api/cves/CVE-2026-2004/progress`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'assigned' })
+    });
+    await fetchJson(`${baseUrl}/api/cves/CVE-2026-2004/progress/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: 'Posted to Teams' })
+    });
+
+    assert.equal(posts.length, 3);
+    assert.equal(posts.every(post => post.url === 'https://example.com/teams'), true);
+
+    axios.post = async () => {
+        throw new Error('Teams down');
+    };
+    const failedNote = await fetchJson(`${baseUrl}/api/cves/CVE-2026-2004/progress/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: 'Still stored locally' })
+    });
+    assert.equal(failedNote.notifications.teams.attempted, true);
+    assert.equal(failedNote.notifications.teams.sent, false);
+    assert.match(failedNote.notifications.teams.error, /Teams down/);
 });
 
 async function startTestServer(t, options = {}) {

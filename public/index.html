@@ -224,6 +224,19 @@
                                 <input type="text" class="search-input" id="progressSearch" placeholder="Search progress..." oninput="debounceSearchProgress()">
                             </div>
                         </div>
+                        <div class="import-panel" aria-label="Import CVEs">
+                            <div class="import-inputs">
+                                <textarea class="note-input import-textarea" id="progressImportText" maxlength="10000" placeholder="CVE-2026-12345" oninput="updateImportPreview()"></textarea>
+                                <div class="import-actions">
+                                    <label class="btn file-btn">
+                                        <input type="file" id="progressImportCsv" accept=".csv,text/csv" onchange="handleImportCsvFile(event)">
+                                        CSV
+                                    </label>
+                                    <button class="btn primary" id="progressImportBtn" onclick="importProgressCves()">Import CVEs</button>
+                                </div>
+                            </div>
+                            <div class="import-preview" id="progressImportPreview">No CVEs selected.</div>
+                        </div>
                         <div class="filter-row" id="progressStatusFilters">
                             <button class="filter-btn active" data-progress-status="all" data-label="All" onclick="filterProgress('all')">All</button>
                             <button class="filter-btn" data-progress-status="open" data-label="Open" onclick="filterProgress('open')">Open</button>

@@ -41,7 +41,8 @@ export function getFeedConfig(overrides = {}) {
         censysApiSecret: valueFrom(overrides.censysApiSecret, 'CENSYS_API_SECRET'),
         abuseipdbApiKey: valueFrom(overrides.abuseipdbApiKey, 'ABUSEIPDB_API_KEY'),
         otxApiKey: valueFrom(overrides.otxApiKey, 'OTX_API_KEY'),
-        whatsapp: getWhatsAppConfig(overrides.whatsapp || overrides)
+        whatsapp: getWhatsAppConfig(overrides.whatsapp || overrides),
+        teams: getTeamsConfig(overrides.teams || overrides)
     };
 }
 
@@ -54,6 +55,13 @@ export function getWhatsAppConfig(overrides = {}) {
         twilioAuthToken: valueFrom(overrides.twilioAuthToken, 'TWILIO_AUTH_TOKEN'),
         twilioFrom: valueFrom(overrides.twilioFrom, 'TWILIO_WHATSAPP_FROM'),
         to: valueFrom(overrides.to, 'WHATSAPP_ALERT_TO')
+    };
+}
+
+export function getTeamsConfig(overrides = {}) {
+    return {
+        enabled: booleanFrom(valueFrom(overrides.enabled, 'TEAMS_ALERTS_ENABLED')),
+        webhookUrl: valueFrom(overrides.webhookUrl, 'TEAMS_WEBHOOK_URL')
     };
 }
 

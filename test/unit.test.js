@@ -8,7 +8,9 @@ import axios from 'axios';
 import { parseCveFilters, parseSearchFilters, validateRefreshOverrides } from '../server/utils/validation.js';
 import { buildRefreshSummary, runWithRefreshLock } from '../server/workers/scheduler.js';
 import { meetsSeverityThreshold } from '../server/services/alerts.js';
+import { importCveProgressItems, normalizeImportItem } from '../server/services/cveImport.js';
 import { parseMalwareBazaarRecentResponse, queryMalwareBazaarByHash } from '../server/services/malwareBazaar.js';
+import { buildTeamsPayload, notifyTeamsProgress } from '../server/services/teams.js';
 import { parseFeodoCsv } from '../server/services/feodo.js';
 import { parseSslblCertCsv, parseSslblIpCsv } from '../server/services/sslbl.js';
 import { parseEpssResponse } from '../server/services/epss.js';
@@ -78,6 +80,30 @@ test('search query validation accepts global search filters', () => {
     assert.equal(filters.limit, 25);
     assert.equal(filters.offset, 5);
     assert.throws(() => parseSearchFilters({ type: 'advisory' }), /type must be one of/);
+});
+
+test('progress import validation accepts flexible fields and rejects bad rows', () => {
+    assert.deepEqual(normalizeImportItem({
+        cve_id: 'cve-2026-1234',
+        status: 'assigned',
+        note: 'Review started',
+        description: 'Manual context',
+        severity: 'high',
+        cvss_score: '8.2'
+    }, 0), {
+        index: 0,
+        id: 'CVE-2026-1234',
+        status: 'assigned',
+        note: 'Review started',
+        description: 'Manual context',
+        severity: 'high',
+        cvss_score: 8.2,
+        valid: true
+    });
+
+    assert.equal(normalizeImportItem({ id: 'not-a-cve' }, 1).valid, false);
+    assert.match(normalizeImportItem({ id: 'CVE-2026-1234', status: 'todo' }, 2).error, /status must be one of/);
+    assert.match(normalizeImportItem({ id: 'CVE-2026-1234', cvss_score: '11' }, 3).error, /cvss_score/);
 });
 
 test('MalwareBazaar parser handles ok and no_results responses', () => {
@@ -428,6 +454,88 @@ test('CVE source merging keeps canonical NVD data and source history', async (t)
     assert.deepEqual(cve.sources, ['nvd', 'cisa_kev']);
 });
 
+test('progress import creates manual placeholders, skips duplicates, and records row failures', async (t) => {
+    const previousDbPath = process.env.CTI_DB_PATH;
+    const tempDir = mkdtempSync(join(tmpdir(), 'cti-dashboard-import-'));
+    process.env.CTI_DB_PATH = join(tempDir, 'cti.db');
+    t.after(() => {
+        if (previousDbPath === undefined) {
+            delete process.env.CTI_DB_PATH;
+        } else {
+            process.env.CTI_DB_PATH = previousDbPath;
+        }
+        rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    const { getCveProgressDetail, initializeDb } = await import('../server/db/database.js');
+    await initializeDb();
+
+    const result = await importCveProgressItems([
+        {
+            id: 'CVE-2026-7000',
+            description: 'Manual placeholder CVE',
+            severity: 'high',
+            cvss_score: 8.1,
+            note: 'Imported from analyst request'
+        },
+        { id: 'CVE-2026-7000' },
+        { id: 'not-a-cve' },
+        { id: 'CVE-2026-7001', status: 'todo' }
+    ], {
+        fetchCveById: async () => null
+    });
+
+    assert.deepEqual(result.summary, {
+        total: 4,
+        imported: 1,
+        updated: 0,
+        placeholders: 1,
+        duplicates: 1,
+        failed: 2
+    });
+
+    const detail = getCveProgressDetail('CVE-2026-7000');
+    assert.equal(detail.source, 'manual');
+    assert.equal(detail.progress_status, 'open');
+    assert.equal(detail.severity, 'high');
+    assert.equal(detail.notes[0].note, 'Imported from analyst request');
+});
+
+test('progress import resolves missing CVEs before falling back to placeholders', async (t) => {
+    const previousDbPath = process.env.CTI_DB_PATH;
+    const tempDir = mkdtempSync(join(tmpdir(), 'cti-dashboard-import-resolve-'));
+    process.env.CTI_DB_PATH = join(tempDir, 'cti.db');
+    t.after(() => {
+        if (previousDbPath === undefined) {
+            delete process.env.CTI_DB_PATH;
+        } else {
+            process.env.CTI_DB_PATH = previousDbPath;
+        }
+        rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    const { getCveProgressDetail, initializeDb } = await import('../server/db/database.js');
+    await initializeDb();
+
+    const result = await importCveProgressItems([{ id: 'CVE-2026-7002' }], {
+        fetchCveById: async () => ({
+            id: 'CVE-2026-7002',
+            source: 'nvd',
+            description: 'Resolved NVD CVE',
+            cvss_score: 9.8,
+            severity: 'critical',
+            published_at: '2026-04-30T00:00:00Z'
+        })
+    });
+
+    assert.equal(result.summary.imported, 1);
+    assert.equal(result.summary.placeholders, 0);
+    const detail = getCveProgressDetail('CVE-2026-7002');
+    assert.equal(detail.source, 'nvd');
+    assert.equal(detail.progress_status, 'open');
+    assert.equal(detail.description, 'Resolved NVD CVE');
+});
+
 test('search index ranks exact matches and honors type/source filters', async (t) => {
     const previousDbPath = process.env.CTI_DB_PATH;
     const tempDir = mkdtempSync(join(tmpdir(), 'cti-dashboard-search-'));
@@ -527,6 +635,53 @@ test('alert severity threshold compares severity rank', () => {
     assert.equal(meetsSeverityThreshold('high', 'critical'), false);
 });
 
+test('Teams progress notifications build adaptive cards and report webhook failures', async (t) => {
+    const originalPost = axios.post;
+    t.after(() => {
+        axios.post = originalPost;
+    });
+
+    const payload = buildTeamsPayload('import_summary', {
+        summary: {
+            total: 3,
+            imported: 2,
+            updated: 1,
+            placeholders: 1,
+            duplicates: 0,
+            failed: 0
+        }
+    });
+    assert.equal(payload.type, 'message');
+    assert.equal(payload.attachments[0].contentType, 'application/vnd.microsoft.card.adaptive');
+
+    axios.post = async (url, body, options) => {
+        assert.equal(url, 'https://example.com/teams');
+        assert.equal(body.type, 'message');
+        assert.equal(options.headers['Content-Type'], 'application/json');
+        return { status: 200 };
+    };
+    assert.deepEqual(await notifyTeamsProgress('status_changed', {
+        cve: { id: 'CVE-2026-1234', progress_status: 'open', severity: 'high', cvss_score: 8.5 }
+    }, {
+        enabled: true,
+        webhookUrl: 'https://example.com/teams'
+    }), { attempted: true, sent: true });
+
+    axios.post = async () => {
+        throw new Error('webhook unavailable');
+    };
+    const failed = await notifyTeamsProgress('note_added', {
+        cve: { id: 'CVE-2026-1234', progress_status: 'open' },
+        note: 'Needs review'
+    }, {
+        enabled: true,
+        webhookUrl: 'https://example.com/teams'
+    });
+    assert.equal(failed.attempted, true);
+    assert.equal(failed.sent, false);
+    assert.match(failed.error, /webhook unavailable/);
+});
+
 test('CSV utilities escape quotes and empty values', () => {
     const code = readFileSync(join(process.cwd(), 'public', 'app-utils.js'), 'utf8');
     const context = { globalThis: null };
@@ -540,4 +695,13 @@ test('CSV utilities escape quotes and empty values', () => {
     );
 
     assert.equal(csv, 'name,empty\n"quote ""inside""",""');
+
+    assert.deepEqual(JSON.parse(JSON.stringify(context.CtiDashboardUtils.parseProgressImportText('CVE-2026-1000, cve-2026-1001'))), [
+        { id: 'CVE-2026-1000' },
+        { id: 'CVE-2026-1001' }
+    ]);
+    assert.deepEqual(
+        JSON.parse(JSON.stringify(context.CtiDashboardUtils.parseProgressImportCsv('cve_id,status,note,cvss\n"CVE-2026-1002",assigned,"quoted, note",7.1\n'))),
+        [{ id: 'CVE-2026-1002', status: 'assigned', note: 'quoted, note', cvss_score: '7.1' }]
+    );
 });
