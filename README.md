@@ -2,17 +2,11 @@
 
 Local cyber threat intelligence dashboard for CVEs, IOC feeds, feed health, and lightweight CVE triage notes.
 
-## Dashboard Preview
+## Preview
 
-| Desktop overview | Mobile overview |
-| --- | --- |
-| ![Desktop dashboard preview](./dashboard-qa-desktop.png) | <img src="./dashboard-qa-mobile.png" alt="Mobile dashboard preview" width="260"> |
-
-## Overview
-
-CTI Dashboard is a local-first analyst workspace for pulling public cyber threat intelligence into one searchable dashboard. It combines vulnerability feeds, IOC feeds, refresh health, CVE progress tracking, and company asset matching so an analyst can quickly answer: what changed, what matters, and what still needs review.
-
-The app is intentionally lightweight: an Express API serves a static dashboard, stores data in a local SQLite-compatible `sql.js` database, and can run fully manually unless you opt into scheduled refreshes or alert webhooks.
+<p>
+  <img src="./dashboard-qa-desktop.png" alt="Desktop dashboard preview" width="360">
+</p>
 
 ## Main Features
 
