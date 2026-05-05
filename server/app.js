@@ -13,11 +13,16 @@ import createStatsRouter from './routes/stats.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const LOCAL_CORS_ORIGINS = [
+    /^http:\/\/localhost(?::\d+)?$/i,
+    /^http:\/\/127\.0\.0\.1(?::\d+)?$/i,
+    /^http:\/\/\[::1\](?::\d+)?$/i
+];
 
 export function createApp(options = {}) {
     const app = express();
 
-    app.use(cors());
+    app.use(cors(createCorsOptions(options)));
     app.use(express.json());
     app.use(express.static(join(__dirname, '../public')));
 
@@ -38,6 +43,33 @@ export function createApp(options = {}) {
     });
 
     return app;
+}
+
+function createCorsOptions(options = {}) {
+    const allowedOrigins = options.corsOrigins ?? parseCorsOrigins(process.env.CTI_CORS_ORIGINS);
+
+    return {
+        origin(origin, callback) {
+            if (!origin || isAllowedCorsOrigin(origin, allowedOrigins)) {
+                return callback(null, true);
+            }
+            return callback(null, false);
+        }
+    };
+}
+
+function parseCorsOrigins(value) {
+    const configured = String(value || '').trim();
+    if (!configured) return LOCAL_CORS_ORIGINS;
+    if (configured === '*') return true;
+    return configured.split(',').map(origin => origin.trim()).filter(Boolean);
+}
+
+function isAllowedCorsOrigin(origin, allowedOrigins) {
+    if (allowedOrigins === true) return true;
+    return allowedOrigins.some(allowed => (
+        allowed instanceof RegExp ? allowed.test(origin) : allowed === origin
+    ));
 }
 
 export async function startDashboard(options = {}) {

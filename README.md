@@ -2,6 +2,28 @@
 
 Local cyber threat intelligence dashboard for CVEs, IOC feeds, feed health, and lightweight CVE triage notes.
 
+## Dashboard Preview
+
+| Desktop overview | Mobile overview |
+| --- | --- |
+| ![Desktop dashboard preview](./dashboard-qa-desktop.png) | <img src="./dashboard-qa-mobile.png" alt="Mobile dashboard preview" width="260"> |
+
+## Overview
+
+CTI Dashboard is a local-first analyst workspace for pulling public cyber threat intelligence into one searchable dashboard. It combines vulnerability feeds, IOC feeds, refresh health, CVE progress tracking, and company asset matching so an analyst can quickly answer: what changed, what matters, and what still needs review.
+
+The app is intentionally lightweight: an Express API serves a static dashboard, stores data in a local SQLite-compatible `sql.js` database, and can run fully manually unless you opt into scheduled refreshes or alert webhooks.
+
+## Main Features
+
+- **Intelligence summary:** high-level CVE and IOC counts, critical/high CVE totals, last-24-hour CVEs, refresh health, feed status, and triage queue counts.
+- **CVE workspace:** searchable CVE list with severity, time range, progress, company-impact filters, CVSS details, source links, notes, and CSV export.
+- **IOC workspace:** searchable indicators across URLs, hashes, IPs, and domains from supported threat feeds, with source metadata and export support.
+- **Progress tracking:** tag CVEs as `Open`, `Assigned`, or `Closed`, add analyst notes, and import CVEs from pasted text or CSV.
+- **Company asset prioritization:** record services and applications your organization uses, import assets from CSV, match CVEs by CPE/package/alias metadata, and prioritize likely company-impacting vulnerabilities.
+- **Feed health view:** see which feeds succeeded, failed, or were skipped because optional keys are missing.
+- **Optional notifications:** send progress updates to Microsoft Teams and high/critical CVE alerts through Twilio WhatsApp when explicitly configured.
+
 ## Requirements
 
 - Node.js 18 or newer
@@ -28,8 +50,16 @@ Useful local controls:
 - `PORT=3000` changes the local server port.
 - `CTI_DB_PATH=` points the app at a different database file.
 - `CTI_ENABLE_SCHEDULER=true` opts into background cron jobs. Leave it unset or `false` for manual-only feed refresh.
+- `CTI_CORS_ORIGINS=` sets comma-separated exact browser origins if you host the UI separately. By default, cross-origin API access is limited to local browser origins.
 
 Optional feed keys and queries live in `.env.example`. For the keyed feeds requested most often, set `VULNCHECK_API_TOKEN`, `SHODAN_API_KEY`, `ABUSEIPDB_API_KEY`, and `OTX_API_KEY`; missing optional keyed feeds are shown as skipped, not as fatal dashboard failures.
+
+## Security And Privacy Notes
+
+- Keep `.env`, `data/`, local database files, logs, and browser QA profiles out of git. The included `.gitignore` covers these local artifacts.
+- The repository includes example screenshots generated from public CVE/IOC feed data; no feed keys, webhook URLs, or local database files are required to view them.
+- The dashboard is designed for local or trusted-network use. It does not include user authentication, so do not expose it directly to the public internet without adding auth, TLS, and deployment-specific access controls.
+- Optional refresh overrides, Teams webhooks, Twilio credentials, and feed API tokens should be treated as secrets. Rotate any token that is ever pasted into a public issue, screenshot, log, or commit.
 
 ## Microsoft Teams Webhooks
 

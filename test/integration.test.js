@@ -72,6 +72,20 @@ test('bad CVE query input returns a normalized 400 error', async (t) => {
     });
 });
 
+test('CORS defaults do not grant arbitrary website access', async (t) => {
+    const { baseUrl } = await startTestServer(t);
+
+    const blocked = await fetch(`${baseUrl}/api/health`, {
+        headers: { Origin: 'https://example.com' }
+    });
+    assert.equal(blocked.headers.get('access-control-allow-origin'), null);
+
+    const local = await fetch(`${baseUrl}/api/health`, {
+        headers: { Origin: 'http://localhost:3000' }
+    });
+    assert.equal(local.headers.get('access-control-allow-origin'), 'http://localhost:3000');
+});
+
 test('feed status endpoint shows newly integrated feeds before keys are configured', async (t) => {
     const { baseUrl } = await startTestServer(t);
     const feeds = await fetchJson(`${baseUrl}/api/stats/feeds`);
